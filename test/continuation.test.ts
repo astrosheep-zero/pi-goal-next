@@ -20,6 +20,22 @@ function harness(g = goal()) {
   return { deps, sent, commits, setIdle: (v: boolean) => { idle = v; }, setPending: (v: boolean) => { pending = v; }, setResult: (v: any) => { nextResult = v; }, setStatus: (status: Goal["status"]) => { if (snapshot) snapshot = { goal: { ...snapshot.goal, status }, revision: snapshot.revision }; }, blockCommit: () => { blocked = true; return () => { blocked = false; release?.(); }; } };
 }
 
+for (const change of ["busy", "queued", "aborted"] as const) {
+  test(`${change} during continuation commit suppresses send`, async () => {
+    const h = harness();
+    const release = h.blockCommit();
+    const controller = new AbortController();
+    const run = createContinuation(h.deps).onSettled(() => !controller.signal.aborted);
+    await Promise.resolve();
+    if (change === "busy") h.setIdle(false);
+    if (change === "queued") h.setPending(true);
+    if (change === "aborted") controller.abort();
+    release();
+    await run;
+    assert.equal(h.sent.length, 0);
+  });
+}
+
 test("sends only after successful commit", async () => { const h = harness(); const c = createContinuation(h.deps); await c.onSettled(); assert.equal(h.sent.length, 1); });
 test("conflict abandons without send", async () => { const h = harness(); h.setResult({ kind: "conflict", snapshot: null }); await createContinuation(h.deps).onSettled(); assert.equal(h.sent.length, 0); });
 test("generation fencing prevents send after invalidation", async () => { const h = harness(); const c = createContinuation(h.deps); const release = h.blockCommit(); const run = c.onSettled(); await Promise.resolve(); c.invalidate(); release(); await run; assert.equal(h.sent.length, 0); });

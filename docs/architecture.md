@@ -27,7 +27,7 @@ Pi 0.85.1 extension package adding a long-running `/goal`. Behavior follows Code
 | `prompts.ts` | Pure: the three Codex-verbatim goal templates — `continuationPrompt(goal)`, `budgetLimitPrompt(goal)`, `objectiveUpdatedPrompt(goal)`; `escapeXmlText` applies to the objective only. | IO, model calls, host-side validation |
 | `tools.ts` | Codex-verbatim tool descriptions, TypeBox schema → `goalCommit.commit` → tool result. Three tools: get_goal / create_goal / update_goal. `update_goal` accepts only complete\|blocked and reports final usage on complete. | writing rules text, touching store/continuation |
 | `commands.ts` | `/goal` subcommands → goal-commit. | direct store access |
-| `lifecycle.ts` | Stateless event mapping (owns only sessionId). Session/branch/compaction policies plus budget-limit steering, see below. | holding Goal state, growing beyond the listed policies |
+| `lifecycle.ts` | Event ordering, live-message identities, run cancellation signal, and input/settlement fences. Session/branch/compaction policies plus budget-limit steering, see below. | holding Goal state |
 | `ui.ts` | status/widget text from `current()` + `accounting.summary()`. Read-only. | writes |
 | `index.ts` | dependency assembly + registration only. | logic |
 
@@ -46,28 +46,33 @@ Internally: check `revision === expectedRevision` and no pending → mark pendin
 ## Two counters
 
 - `revision` (goal-commit): +1 per commit, CAS basis.
-- `generation` (continuation): the implementation currently invalidates it on tree navigation (`session_before_tree`). Pause, clear, resume, and session restore do not call the continuation invalidation hook; status changes are still protected by the active-status check and the commit CAS. Every continuation message carries `{ goalId, generation, seq }` in details.
+- `generation` (continuation): invalidated on session restore, tree navigation, input receipt, and user-message delivery. Pause and clear are protected by the active-status check and the commit CAS. Every continuation message carries `{ goalId, generation, seq }` in details. A separate lifecycle epoch rejects settlement work overtaken by another run or input.
 
 ## Continuation protocol
 
-`agent_settled` → read `current()` + require `ctx.isIdle() && !ctx.hasPendingMessages()` → `commit(continuation_sent {generation, seq}, revision)` → only on success `pi.sendMessage(continuation, { triggerTurn: true })`. On conflict: abandon this round, wait for next settle.
+`message_end` captures the current event's stop reason. Only a fresh `stop` or `length` response authorizes automatic work at `agent_settled`, after Pi has drained tools, retries, compaction, and queued messages. Settlement consumes that authorization once. The run's captured abort signal must not be aborted, no new input may be awaiting delivery, and Pi must be idle with no queued messages.
+
+Then read `current()` → `commit(continuation_sent {generation}, revision)` → recheck lifecycle authorization, generation, goal identity/status, idle state, and pending messages → `pi.sendMessage(continuation, { triggerTurn: true })`. On conflict or invalidation, abandon this attempt. An abandoned attempt may consume a sequence number because Pi cannot atomically commit the journal and admit a new turn. Explicit `/goal` create/resume can start idle work without a preceding assistant response.
 
 Stale continuation: Pi has no message retraction and `abort` cannot selectively cancel a goal message, so **never abort**. On `message_start`, lifecycle notifies continuation; if the custom continuation message is ours and generation is stale, record `stale_turn`. The current implementation does not propagate that marker to accounting usage deltas and does not have a separate stale-turn scheduling fence; subsequent scheduling still uses the normal active-status, idle/pending-message, limit, and CAS checks. Every continuation message body is Codex's `continuation.md` verbatim: the objective is wrapped in `<objective>` as user-provided data, and the budget, evidence, fidelity, completion-audit, blocked-audit, and closing rules are stated inline.
 
-User messages win: `hasPendingMessages()` check + CAS conflict as backstop.
+User messages win: `input` invalidates outstanding continuation attempts before Pi queues the message. Delivery at `message_start` clears the input-preflight fence and invalidates old completion state. Idle/queue checks are repeated after the commit await. Ordinary input injects no goal prompt; a normal response to that input may continue the still-active goal once the whole run settles.
 
 ## lifecycle.ts — the lifecycle policies
 
-1. `session_start`: any restored `active` goal → commit a system transition to `paused` (the journal does not contain a separate `loaded` entry). Never silently resume; the continuation generation is not explicitly invalidated by this hook.
-2. `session_before_tree`: tell continuation to void generation; next event triggers rebuild from `getBranch()` via goal-commit.
-3. `session_before_compact`: append `goal.summarize()` text to the compaction if the hook allows (verify at implementation; continuation messages are self-contained regardless).
-4. `agent_settled`: commit the accounting verdict, then — if the current goal is `budget_limited` and this goal instance has not been steered yet — send `budgetLimitPrompt(goal)` with `triggerTurn: true`. Steering is sent once per goal instance (`steeredGoalId`/`steered` closure state, reset on a null snapshot or a new goal id). Then run `continuation.onSettled()`, except that it skips continuation when the previous turn ended error/aborted (structured `stopReason`; such turns produced no completed work).
+1. `session_start`: invalidate pending work, rebuild, and transition any restored `active` goal to `paused`. Never silently resume.
+2. `session_before_tree`: invalidate pending work; the next event rebuilds from the selected branch.
+3. `session_before_compact`: provide `goal.summarize()` text if the hook supports the required fields.
+4. `agent_start`: reset completion state and capture `ctx.signal`. Retain that signal after Pi clears its current signal at idle, so cancellation during message/agent-end handlers still suppresses continuation.
+5. `message_end`: account the current message and capture its stop reason. Pi dispatches this hook **before** appending the message to SessionManager; never substitute the last persisted same-role message.
+6. `input` / user `message_start`: invalidate old scheduling and track input receipt through delivery.
+7. `agent_settled`: require and consume a fresh normal, uncancelled completion. Apply accounting limits, recheck input/run eligibility, and send budget steering once per goal instance if eligible. Otherwise run `continuation.onSettled(canSend)` with the same eligibility checks across the commit await. Error, aborted, toolUse-only, and empty runs send nothing.
 
-No other business. Retry needs no lifecycle handling — accounting dedupes by message id; retry messages have new ids and are honestly counted (they cost real tokens).
+Retry messages are separately accounted because each response costs real tokens. Only the final successful run can authorize continuation.
 
 ## accounting rules
 
-- Dedup key: session entry id of the assistant/toolResult message.
+- Dedup key: an in-memory ID assigned by WeakMap to each assistant/toolResult event message object. Session entry IDs do not yet exist at `message_end`. Usage deltas are journaled immediately; historical messages are not replayed into accounting on reload.
 - Only count usage Pi reports. Missing usage → recorded as `unknown`, never assumed zero.
 - toolResult.usage (nested/subagent usage) counts only when present; the coverage gap is disclosed in UI + limits.md.
 - Final completing turn IS accounted (same as both reference implementations).
@@ -103,4 +108,4 @@ max continuations (turns): 25 · token budget: unset (opt-in) · the blocked-loo
 
 ## Testing
 
-vitest or node:test (implementer's choice, state it). fake-pi support harness drives events. Required: goal transitions incl. illegal ones; CAS conflict/pending/append-failure; branch fold isolation; dedup by message id; settleTurn verdicts incl. final-turn accounting; continuation send-only-after-commit, conflict-abandon, generation fencing, stale turn; prompt templates (escaping, budget math, injection guard, no update_plan); tools schema; command flows; lifecycle policies incl. budget steering; integration replay of a full goal session on fake-pi.
+node:test covers goal transitions, journal replay, CAS conflicts, limits, prompts, commands, and lifecycle races. `test/pi-session.test.ts` additionally runs real Pi 0.85.1 AgentSessions with in-memory settings/sessions and a deterministic model stream (no network). It verifies pre-append event ordering, usage accounting, normal→error/abort transitions, abort during streaming and at message/agent-end boundaries, steering delivery, and the absence of a continuation attached to user input. The pre-fix 0.1.4 code fails the real-session error/abort regressions.

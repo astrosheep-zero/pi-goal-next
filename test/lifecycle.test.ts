@@ -20,6 +20,68 @@ function setup(entries: any[] = []) {
   return { fake, goalCommit, accounting };
 }
 
+for (const stopReason of ["error", "aborted", "toolUse", undefined]) {
+  test(`current ${stopReason} after prior stop cannot trigger automatic work`, async () => {
+    const h = setup();
+    await h.goalCommit.commit({ type: "create", id: "g", objective: "work", maxContinuations: 0 }, 0);
+    h.fake.state.branch.push({ type: "message", id: "previous", message: { role: "assistant", stopReason: "stop", usage: { input: 99 } } });
+    await h.fake.emit("message_end", { message: { role: "assistant", stopReason, usage: { input: 3 } } });
+    await h.fake.emit("agent_settled");
+    assert.equal(h.fake.sentMessages.length, 0);
+    assert.equal(h.goalCommit.current().goal.usage.input, 3);
+  });
+}
+
+test("settlement requires a fresh completion and is consumed once", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+  await h.fake.emit("agent_settled");
+  assert.equal(h.fake.sentMessages.length, 0);
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop" } });
+  await h.fake.emit("agent_settled");
+  await h.fake.emit("agent_settled");
+  assert.equal(h.fake.sentMessages.length, 1);
+  await h.fake.emit("agent_start");
+  await h.fake.emit("agent_settled");
+  assert.equal(h.fake.sentMessages.length, 1);
+});
+
+for (const maxContinuations of [0, 25]) {
+  test(`input during commit prevents automatic send (limit ${maxContinuations})`, async () => {
+    const h = setup();
+    await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+    await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop" } });
+    await h.goalCommit.commit({ type: "limit_config", tokenBudget: null, maxContinuations }, h.goalCommit.current().revision);
+    const original = h.goalCommit.commit;
+    let intercepted = false;
+    h.goalCommit.commit = async (intent: any, revision: number) => {
+      const result = await original(intent, revision);
+      if (!intercepted) {
+        intercepted = true;
+        // Pi has delivered input, but hasn't queued it or started its run yet.
+        await h.fake.emit("input", { source: "rpc" });
+      }
+      return result;
+    };
+    await h.fake.emit("agent_settled");
+    assert.ok(intercepted);
+    assert.equal(h.fake.sentMessages.length, 0);
+  });
+}
+
+test("input preflight prevents old completion from sending before user message starts", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+  await h.fake.emit("input", { source: "rpc" });
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop" } });
+  await h.fake.emit("agent_settled");
+  assert.equal(h.fake.sentMessages.length, 0);
+  await h.fake.emit("message_start", { message: { role: "user" } });
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop" } });
+  await h.fake.emit("agent_settled");
+  assert.equal(h.fake.sentMessages.length, 1);
+});
+
 test("replays goal lifecycle: usage is journaled and completion remains final", async () => {
   const h = setup();
   await h.fake.emit("session_start");
@@ -34,12 +96,13 @@ test("replays goal lifecycle: usage is journaled and completion remains final", 
   assert.equal(h.goalCommit.current()?.goal.status, "complete");
 });
 
-test("message_end prefers usage from branch entry", async () => {
+test("message_end uses current event before persistence, never previous branch usage", async () => {
   const h = setup();
   await h.goalCommit.commit({ type: "create", id: "g", objective: "ship" }, 0);
   h.fake.state.branch.push({ id: "m1", role: "assistant", usage: { input: 7, output: 2 } });
-  await h.fake.emit("message_end", { message: { id: "m1", role: "assistant" } });
-  assert.equal(h.goalCommit.current()?.goal.usage.input, 7);
+  await h.fake.emit("message_end", { message: { role: "assistant", usage: { input: 11, output: 9 } } });
+  assert.equal(h.goalCommit.current()?.goal.usage.input, 11);
+  assert.equal(h.goalCommit.current()?.goal.usage.output, 9);
 });
 
 test("usage commit retries a conflict", async () => {
@@ -148,7 +211,7 @@ test("usage-journal budget flip steers exactly once", async () => {
   const h = setup();
   await h.goalCommit.commit({ type: "create", id: "g", objective: "ship", tokenBudget: 5 }, 0);
   h.fake.state.branch.push({ id: "m1", role: "assistant", usage: { input: 5 } });
-  await h.fake.emit("message_end", { message: { id: "m1", role: "assistant", usage: { input: 5 } } });
+  await h.fake.emit("message_end", { message: { id: "m1", role: "assistant", usage: { input: 5 }, stopReason: "stop" } });
   assert.equal(h.goalCommit.current()?.goal.status, "budget_limited");
   await h.fake.emit("agent_settled");
   const steers = () => h.fake.sentMessages.filter((m: any) => m.message.customType === "pi-goal-next/budget_limit");
@@ -161,6 +224,7 @@ test("usage-journal budget flip steers exactly once", async () => {
 test("verdict-commit budget flip steers exactly once", async () => {
   const h = setup();
   await h.goalCommit.commit({ type: "create", id: "g", objective: "ship", maxContinuations: 0 }, 0);
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 1 } } });
   await h.fake.emit("agent_settled");
   assert.equal(h.goalCommit.current()?.goal.status, "budget_limited");
   const steers = () => h.fake.sentMessages.filter((m: any) => m.message.customType === "pi-goal-next/budget_limit");

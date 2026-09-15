@@ -15,27 +15,6 @@ export type LifecycleDeps = {
   rebuild(): void;
 };
 
-function branchTail(ctx: any): any[] {
-  const branch = ctx?.sessionManager?.getBranch?.();
-  return Array.isArray(branch) ? branch : [];
-}
-
-function messageFromEvent(event: any, ctx: any): Message | null {
-  const message = event?.message ?? event;
-  if (!message || (message.role !== "assistant" && message.role !== "toolResult")) return null;
-  const tail = branchTail(ctx);
-  const candidate = [...tail].reverse().find((entry: any) => {
-    const m = entry?.message ?? entry;
-    return m?.role === message.role;
-  });
-  const m = candidate?.message ?? candidate ?? message;
-  const entryId = candidate?.id ?? candidate?.entryId ?? m?.id ?? m?.entryId ?? message.id ?? message.entryId;
-  // Entry identity is heuristic-by-position because branch entries may omit message ids.
-  return typeof entryId === "string"
-    ? { entryId, role: message.role, usage: m?.usage ?? message.usage, toolName: m?.toolName ?? message.toolName, stopReason: m?.stopReason ?? message.stopReason }
-    : null;
-}
-
 export type PiEvents = { on(name: string, handler: (event: any, ctx: any) => unknown): void };
 export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
   async function commitWithRetry(intent: Intent, attempts = 3): Promise<void> {
@@ -53,8 +32,28 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
   let steered = false;
   // Stop reason of the most recent assistant turn; gates continuation on normal completion.
   let lastAssistantStop: string | undefined;
+  let epoch = 0;
+  let inputPending = false;
+  let runSignal: AbortSignal | undefined;
+  // message_end precedes SessionManager.appendMessage. Its object is authoritative;
+  // no persisted entry ID exists yet. Deduplicate live events by object identity.
+  const messageIds = new WeakMap<object, string>();
+  let messageSeq = 0;
+  const invalidate = () => {
+    epoch += 1;
+    lastAssistantStop = undefined;
+    deps.continuation.invalidate();
+  };
+  pi.on("agent_start", (_event: unknown, ctx: any) => {
+    epoch += 1;
+    lastAssistantStop = undefined;
+    // Retain the signal: ctx.signal becomes undefined once the run is idle.
+    runSignal = ctx.signal;
+  });
 
   pi.on("session_start", async (_event: SessionStartEvent, ctx: any) => {
+    invalidate();
+    inputPending = false;
     await bootstrap();
     const snapshot = deps.goalCommit.current();
     if (snapshot?.goal?.status === "active") {
@@ -63,7 +62,8 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
   });
 
   pi.on("session_before_tree", async (_event: any, ctx: any) => {
-    deps.continuation.invalidate();
+    invalidate();
+    inputPending = false;
     pendingRebuild = true;
     // Pi's tree hook does not expose the post-navigation branch; rebuild on the next event.
     void ctx;
@@ -82,9 +82,12 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
   const before = async (_ctx: any) => { if (pendingRebuild) { pendingRebuild = false; await bootstrap(); } };
   pi.on("message_end", async (event: MessageEndEvent, ctx: any) => {
     await before(ctx);
-    const message = messageFromEvent(event, ctx);
-    if (!message) return;
-    if (message.role === "assistant") lastAssistantStop = message.stopReason;
+    const m = event.message;
+    if (m.role !== "assistant" && m.role !== "toolResult") return;
+    if (m.role === "assistant") lastAssistantStop = m.stopReason;
+    let entryId = messageIds.get(m);
+    if (!entryId) { entryId = `live-message:${++messageSeq}`; messageIds.set(m, entryId); }
+    const message: Message = { ...m, entryId };
     const recorded = deps.accounting.recordMessage(message);
     if (recorded && !recorded.duplicate) {
       const delta = recorded.delta;
@@ -95,14 +98,21 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     await before(ctx);
     const snapshot = deps.goalCommit.current();
     if (!snapshot) { steeredGoalId = null; steered = false; return; }
-    // Cancellation gates every automatic send, including budget-limit steering.
-    if (lastAssistantStop === "error" || lastAssistantStop === "aborted") return;
+    const settledEpoch = epoch;
+    const settledSignal = runSignal;
+    const canSend = () => epoch === settledEpoch && !settledSignal?.aborted && !inputPending && ctx.isIdle() && !ctx.hasPendingMessages();
+    // Only a fresh normal completion can authorize automatic work. Consume it
+    // once: duplicate settled events and tool-boundary aborts cannot restart us.
+    const stop = lastAssistantStop;
+    lastAssistantStop = undefined;
+    if ((stop !== "stop" && stop !== "length") || !canSend()) return;
     if (snapshot.goal.status !== "active" && snapshot.goal.status !== "budget_limited") return;
     const verdict = deps.accounting.settleTurn(snapshot.goal);
     if (verdict.kind !== "ok") {
       const latest = deps.goalCommit.current();
       if (latest && latest.goal.status !== verdict.kind) await commitWithRetry({ type: "transition", to: verdict.kind, by: "system" });
     }
+    if (!canSend()) return;
     const latest = deps.goalCommit.current();
     if (!latest) { steeredGoalId = null; steered = false; return; }
     const goal = latest.goal;
@@ -111,8 +121,17 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
       steered = true;
       deps.send({ customType: "pi-goal-next/budget_limit", content: budgetLimitPrompt(goal), display: false, details: { goalId: goal.id } }, { triggerTurn: true });
     }
-    await deps.continuation.onSettled();
+    await deps.continuation.onSettled(canSend);
   });
-  pi.on("message_start", async (event: MessageStartEvent, ctx: any) => { await before(ctx); await deps.continuation.onMessageStart(event?.message ?? event); });
-  pi.on("input", async (_event: InputEvent, ctx: any) => { await before(ctx); });
+  pi.on("message_start", async (event: MessageStartEvent, ctx: any) => {
+    if (event.message.role === "user") { inputPending = false; invalidate(); }
+    await before(ctx);
+    await deps.continuation.onMessageStart(event.message);
+  });
+  pi.on("input", async (_event: InputEvent, ctx: any) => {
+    // Runs before Pi queues the input, so hasPendingMessages alone is too late.
+    inputPending = true;
+    invalidate();
+    await before(ctx);
+  });
 }

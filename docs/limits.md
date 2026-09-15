@@ -16,7 +16,7 @@ The extension uses the public Pi 0.85.1 event, session, message, and send APIs. 
 
 **Cannot guarantee:** Pi does not expose nested or subagent token usage consistently for every tool result.
 
-**What it does:** Counts nested usage only when it is present in `toolResult.usage`; missing usage is recorded as unknown. Top-level assistant and tool-result messages are deduplicated by entry id.
+**What it does:** Counts nested usage only when it is present in `toolResult.usage`; missing usage is recorded as unknown. Top-level assistant and tool-result events are deduplicated by live message-object identity, since their session entry IDs do not yet exist during `message_end`. Journaled usage survives reload; historical events are not counted again.
 
 **User sees:** The status line can show `unknown messages=N`, and budget totals can be lower than provider-side totals when nested usage was not reported.
 
@@ -42,7 +42,7 @@ The extension uses the public Pi 0.85.1 event, session, message, and send APIs. 
 
 **Cannot guarantee:** Restoring a session does not prove that an in-flight continuation was never sent before the process stopped.
 
-**What it does:** Rebuilds from the selected branch and converts any restored `active` goal to `paused` with a system transition. It does not silently resume and does not explicitly invalidate the continuation generation in this hook.
+**What it does:** Invalidates outstanding scheduling, rebuilds from the selected branch, and converts any restored `active` goal to `paused` with a system transition. It does not silently resume.
 
 **User sees:** A restored active goal is paused and requires `/goal resume`. A previously sent message may still be present in the provider transcript, but the restored status prevents normal continuation scheduling.
 
@@ -74,6 +74,6 @@ The extension uses the public Pi 0.85.1 event, session, message, and send APIs. 
 
 **Cannot guarantee:** Event delivery and message queue timing are controlled by Pi.
 
-**What it does:** Requires idle state and no pending messages before the continuation CAS commit, then sends only after that commit succeeds. A user message arriving concurrently is handled by the pending-message check or a CAS conflict.
+**What it does:** Requires a fresh normal completion and an uncancelled run. Input receipt invalidates pending scheduling before Pi queues the message; its delivery clears the input-preflight fence. Idle/queue state, cancellation, and lifecycle eligibility are checked both before and after the continuation CAS commit. Pi does not expose an atomic journal-commit-and-start-if-idle operation, so a cancelled attempt may consume a continuation sequence number without sending a prompt.
 
-**User sees:** A continuation can be skipped after a race with user input; the goal remains available for the next settled event or explicit resume.
+**User sees:** A continuation can be skipped after a race with user input; the goal remains available after a later normal completion or explicit resume. If another extension handles/rejects input without delivering a user message, automatic scheduling stays suppressed until a later user message is delivered; explicit resume remains available.

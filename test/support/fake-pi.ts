@@ -13,6 +13,8 @@ export function createFakePi(initial: any[] = []) {
   let idle = true;
   let pending = false;
   const ctx: any = {
+    isIdle: () => idle,
+    hasPendingMessages: () => pending,
     sessionManager: { getBranch: () => state.branch, appendCustomEntry: (customType: string, data: any) => { const e = { type: "custom", customType, data }; state.branch.push(e); state.entries.push(e); } },
     ui: { statuses: new Map<string, string>(), setStatus: (id: string, text: string) => ctx.ui.statuses.set(id, text), notify: () => undefined }
   };

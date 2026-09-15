@@ -63,7 +63,7 @@ The prompt text is copied byte-for-byte from Codex Goal (`continuation.md`, `bud
 
 - The default maximum is 25 continuation turns (`maxContinuations`) per run. Change it with `/goal turns N`. `/goal resume` resets the run's continuation count and immediately schedules work when idle. It preserves the objective, journal history, cumulative usage, and token budget. If the token budget is exhausted or the continuation allowance is zero, resume reports the limit instead of claiming success.
 - A token budget is unset by default. Set one at creation with `/goal --tokens N[k|M] ...` or later with `/goal budget N`.
-- Usage is attributed by message entry id, separately for assistant and tool-result messages. Duplicate entry ids are ignored.
+- Usage comes directly from each completed assistant/tool-result event. Repeated delivery of the same live message object is deduplicated. Pi has not assigned a session entry id at this event boundary; historical messages are not re-accounted on reload.
 - Missing provider usage is recorded as unknown, never treated as confirmed zero.
 - Nested or subagent usage is counted only when Pi exposes it as `toolResult.usage` data; see [limits](docs/limits.md).
 - The final completing turn is included in accounting.
@@ -72,4 +72,6 @@ The prompt text is copied byte-for-byte from Codex Goal (`continuation.md`, `bud
 
 The model calls `update_goal` after auditing the current goal against the Codex completion audit carried in every continuation prompt. The host accepts `complete` and `blocked` at face value and performs no independent verification; the prompt is the only guard. `complete` reports final token usage in the tool result, and `blocked` is meant to follow three consecutive turns with the same blocker. `paused` is user-only (`/goal pause`). Runtime accounting may instead move an active goal to `budget_limited`; the model cannot declare that state, and the transition triggers one `budget_limit.md` steering message.
 
-Continuation messages are sent only after a successful journal commit and only while Pi is idle with no pending messages. A continuation carries the goal id, generation, and sequence number. User input and compare-and-swap conflicts prevent a new continuation from being sent.
+Automatic continuation waits for a fresh normal assistant completion and for the entire Pi run to settle, including tools, retries, compaction, and queued input. Errors, cancellation (including cancellation after text finishes), and runs ending at a tool boundary do not trigger continuation or budget steering. Ordinary user input has no continuation attached; once the response to that input finishes normally, an active goal may continue.
+
+Continuation messages are sent only after a successful journal commit. The plugin checks cancellation, goal state, and pending input again after that commit, immediately before sending. A continuation carries the goal id, generation, and sequence number. Input received during scheduling invalidates the automatic send. Explicit `/goal` create/resume can start work immediately when idle.

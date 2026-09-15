@@ -18,7 +18,7 @@ export type ContinuationDeps = {
 
 export type Continuation = {
   invalidate(): void;
-  onSettled(): Promise<void>;
+  onSettled(canSend?: () => boolean): Promise<void>;
   onMessageStart(message: unknown): Promise<void>;
   hadStaleTurn(): boolean;
 };
@@ -32,8 +32,8 @@ export function createContinuation(deps: ContinuationDeps): Continuation {
     generation += 1;
   }
 
-  async function onSettled(): Promise<void> {
-    if (!deps.isIdle() || deps.hasPendingMessages()) return;
+  async function onSettled(canSend: () => boolean = () => true): Promise<void> {
+    if (!canSend() || !deps.isIdle() || deps.hasPendingMessages()) return;
     const snapshot = deps.getSnapshot();
     if (!snapshot || snapshot.goal.status !== "active") return;
     const { goal, revision } = snapshot;
@@ -45,6 +45,7 @@ export function createContinuation(deps: ContinuationDeps): Continuation {
     if (result.kind !== "ok" || generation !== leaseGeneration) return;
     const latest = deps.getSnapshot();
     if (!latest || latest.goal.id !== goal.id || latest.goal.status !== "active") return; // user may have cleared/paused during the commit await
+    if (!canSend() || !deps.isIdle() || deps.hasPendingMessages()) return;
 
     deps.send({
       customType: "pi-goal-next/continuation",
