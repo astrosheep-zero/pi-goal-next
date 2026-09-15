@@ -43,6 +43,8 @@ export function createContinuation(deps: ContinuationDeps): Continuation {
     const seq = goal.continuationSeq + 1;
     const result = await deps.commit({ type: "continuation_sent", generation: leaseGeneration }, revision);
     if (result.kind !== "ok" || generation !== leaseGeneration) return;
+    const latest = deps.getSnapshot();
+    if (!latest || latest.goal.id !== goal.id || latest.goal.status !== "active") return; // user may have cleared/paused during the commit await
 
     deps.send({
       customType: "pi-goal-next/continuation",
