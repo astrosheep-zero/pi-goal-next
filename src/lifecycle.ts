@@ -29,7 +29,7 @@ function messageFromEvent(event: any, ctx: any): Message | null {
     return m?.role === message.role;
   });
   const m = candidate?.message ?? candidate ?? message;
-  const entryId = m?.id ?? m?.entryId ?? message.id ?? message.entryId;
+  const entryId = candidate?.id ?? candidate?.entryId ?? m?.id ?? m?.entryId ?? message.id ?? message.entryId;
   // Entry identity is heuristic-by-position because branch entries may omit message ids.
   return typeof entryId === "string"
     ? { entryId, role: message.role, usage: m?.usage ?? message.usage, toolName: m?.toolName ?? message.toolName, stopReason: m?.stopReason ?? message.stopReason }
@@ -95,6 +95,9 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     await before(ctx);
     const snapshot = deps.goalCommit.current();
     if (!snapshot) { steeredGoalId = null; steered = false; return; }
+    // Cancellation gates every automatic send, including budget-limit steering.
+    if (lastAssistantStop === "error" || lastAssistantStop === "aborted") return;
+    if (snapshot.goal.status !== "active" && snapshot.goal.status !== "budget_limited") return;
     const verdict = deps.accounting.settleTurn(snapshot.goal);
     if (verdict.kind !== "ok") {
       const latest = deps.goalCommit.current();
@@ -108,8 +111,6 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
       steered = true;
       deps.send({ customType: "pi-goal-next/budget_limit", content: budgetLimitPrompt(goal), display: false, details: { goalId: goal.id } }, { triggerTurn: true });
     }
-    // Error/aborted turns produced no completed work; only continue after a normally-finished turn (Codex parity).
-    if (lastAssistantStop === "error" || lastAssistantStop === "aborted") return;
     await deps.continuation.onSettled();
   });
   pi.on("message_start", async (event: MessageStartEvent, ctx: any) => { await before(ctx); await deps.continuation.onMessageStart(event?.message ?? event); });

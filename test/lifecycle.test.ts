@@ -108,6 +108,42 @@ test("aborted turn skips continuation", async () => {
   assert.equal(h.fake.sentMessages.length, 0);
 });
 
+test("wrapped session entries preserve identity, usage, and cancellation", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "ship", tokenBudget: 5 }, 0);
+  const message = { role: "assistant", usage: { input: 5, output: 2 }, stopReason: "aborted" };
+  h.fake.state.branch.push({ type: "message", id: "outer-id", message });
+  await h.fake.emit("message_end", { message });
+  await h.fake.emit("message_end", { message });
+  assert.equal(h.goalCommit.current()?.goal.usage.input, 5);
+  assert.equal(h.goalCommit.current()?.goal.usage.output, 2);
+  await h.fake.emit("agent_settled");
+  assert.equal(h.fake.sentMessages.length, 0);
+});
+
+for (const status of ["paused", "blocked", "complete"] as const) {
+  test(`${status} goal remains unchanged at continuation limit`, async () => {
+    const h = setup();
+    await h.goalCommit.commit({ type: "create", id: "g", objective: "ship", maxContinuations: 0 }, 0);
+    await h.goalCommit.commit({ type: "transition", to: status, by: "user", userRequest: "stop" }, h.goalCommit.current().revision);
+    await h.fake.emit("agent_settled");
+    assert.equal(h.goalCommit.current()?.goal.status, status);
+    assert.equal(h.fake.sentMessages.length, 0);
+  });
+}
+
+for (const stopReason of ["aborted", "error"]) {
+  test(`${stopReason} at continuation limit sends no budget prompt`, async () => {
+    const h = setup();
+    await h.goalCommit.commit({ type: "create", id: "g", objective: "ship", maxContinuations: 0 }, 0);
+    const message = { role: "assistant", usage: { input: 0, output: 0 }, stopReason };
+    h.fake.state.branch.push({ type: "message", id: "outer", message });
+    await h.fake.emit("message_end", { message });
+    await h.fake.emit("agent_settled");
+    assert.equal(h.fake.sentMessages.length, 0);
+  });
+}
+
 test("usage-journal budget flip steers exactly once", async () => {
   const h = setup();
   await h.goalCommit.commit({ type: "create", id: "g", objective: "ship", tokenBudget: 5 }, 0);
