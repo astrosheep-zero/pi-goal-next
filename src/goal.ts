@@ -7,7 +7,7 @@ export type Goal = {
 };
 export type Entry =
   | { type: "goal.created"; version: 1; seq: number; goal: Goal }
-  | { type: "goal.transition"; version: 1; seq: number; from: Status; to: Status; by: Actor; userRequest?: string }
+  | { type: "goal.transition"; version: 1; seq: number; from: Status; to: Status; by: Actor; userRequest?: string; resetContinuations?: boolean }
   | { type: "goal.cleared"; version: 1; seq: number }
   | { type: "goal.usage"; version: 1; seq: number; input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null; unknownMessages: number }
   | { type: "goal.continuation_sent"; version: 1; seq: number; generation: number }
@@ -15,7 +15,7 @@ export type Entry =
   | { type: "goal.limit_config"; version: 1; seq: number; tokenBudget: number | null; maxContinuations: number };
 export type Intent =
   | { type: "create"; id: string; objective: string; tokenBudget?: number | null; maxContinuations?: number }
-  | { type: "transition"; to: Status; by: Actor; userRequest?: string }
+  | { type: "transition"; to: Status; by: Actor; userRequest?: string; resetContinuations?: boolean }
   | { type: "clear" }
   | { type: "usage"; input?: number | null; output?: number | null; cacheRead?: number | null; cacheWrite?: number | null; unknownMessages?: number }
   | { type: "continuation_sent"; generation: number }
@@ -55,8 +55,11 @@ export function transition(state: Goal | null, intent: Intent): Goal | null {
     if (intent.to === "paused" && !intent.userRequest?.trim()) throw new GoalError("forbidden", "paused requires user request evidence");
     if (intent.by === "agent" && !["complete", "blocked"].includes(intent.to)) throw new GoalError("forbidden", "agent cannot set this status");
     if (intent.by === "agent" && intent.to === "complete" && state.status !== "active") throw new GoalError("forbidden", "agent can complete only an active goal");
-    if (state.status === "complete" || intent.to === state.status) throw new GoalError("illegal", "illegal status transition");
-    return { ...state, status: intent.to };
+    const reset = intent.resetContinuations === true;
+    if (reset && (intent.by !== "user" || intent.to !== "active")) throw new GoalError("forbidden", "only user resume can reset continuations");
+    if (reset && state.tokenBudget !== null && usageKeys.reduce((sum, key) => sum + state.usage[key], 0) >= state.tokenBudget) throw new GoalError("budget", "token budget exhausted; adjust /goal budget before resuming");
+    if (state.status === "complete" || (intent.to === state.status && !reset)) throw new GoalError("illegal", "illegal status transition");
+    return { ...state, status: intent.to, ...(reset ? { continuationSeq: 0 } : {}) };
   }
   if (intent.type === "limit_config") {
     if (!Number.isInteger(intent.maxContinuations) || intent.maxContinuations < 0 || (intent.tokenBudget !== null && (!Number.isFinite(intent.tokenBudget) || intent.tokenBudget < 0))) throw new GoalError("invalid", "invalid limits");
@@ -95,7 +98,7 @@ export function fold(entries: readonly Entry[]): Goal | null {
     if (!entry.type.startsWith("goal.")) continue;
     if (entry.type === "goal.created") state = { ...entry.goal };
     else if (entry.type === "goal.cleared") state = null;
-    else if (state && entry.type === "goal.transition") state = transition(state, { type: "transition", to: entry.to, by: entry.by, userRequest: entry.userRequest });
+    else if (state && entry.type === "goal.transition") state = transition(state, { type: "transition", to: entry.to, by: entry.by, userRequest: entry.userRequest, resetContinuations: entry.resetContinuations });
     else if (state && entry.type === "goal.limit_config") state = transition(state, { type: "limit_config", tokenBudget: entry.tokenBudget, maxContinuations: entry.maxContinuations });
     else if (state && entry.type === "goal.continuation_sent") state = transition(state, { type: "continuation_sent", generation: entry.generation });
     else if (state && entry.type === "goal.usage") state = transition(state, { type: "usage", input: entry.input, output: entry.output, cacheRead: entry.cacheRead, cacheWrite: entry.cacheWrite, unknownMessages: entry.unknownMessages });

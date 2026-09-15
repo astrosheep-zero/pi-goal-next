@@ -49,7 +49,13 @@ export function registerGoalCommands(piLike: CommandPiLike, deps: CommandDeps): 
         case "clear": return finish(await goalCommit.commit({ type: "clear" }, revision), "Goal cleared.");
         case "pause": return finish(await goalCommit.commit({ type: "transition", to: "paused", by: "user", userRequest: '"/goal pause"' }, revision), "Goal paused.");
         case "resume": {
-          const r = await goalCommit.commit({ type: "transition", to: "active", by: "user" }, revision);
+          if (!current) return "Cannot resume: no goal exists.";
+          const goal = current.goal;
+          if (goal.status === "complete") return "Cannot resume: goal is complete.";
+          const used = goal.usage.input + goal.usage.output + goal.usage.cacheRead + goal.usage.cacheWrite;
+          if (goal.tokenBudget !== null && used >= goal.tokenBudget) return "Cannot resume: token budget exhausted. Adjust /goal budget first; cumulative usage is preserved.";
+          if (goal.maxContinuations === 0) return "Cannot resume: continuation allowance is zero. Adjust /goal turns first.";
+          const r = await goalCommit.commit({ type: "transition", to: "active", by: "user", resetContinuations: true }, revision);
           if (r.kind === "ok") await deps.kick();
           return r.kind === "ok" ? "Goal resumed." : "Goal update failed.";
         }

@@ -61,7 +61,7 @@ The prompt text is copied byte-for-byte from Codex Goal (`continuation.md`, `bud
 
 ## Limits and accounting
 
-- The default maximum is 25 continuation turns (`maxContinuations`). Change it with `/goal turns N`.
+- The default maximum is 25 continuation turns (`maxContinuations`) per run. Change it with `/goal turns N`. `/goal resume` resets the run's continuation count and immediately schedules work when idle. It preserves the objective, journal history, cumulative usage, and token budget. If the token budget is exhausted or the continuation allowance is zero, resume reports the limit instead of claiming success.
 - A token budget is unset by default. Set one at creation with `/goal --tokens N[k|M] ...` or later with `/goal budget N`.
 - Usage is attributed by message entry id, separately for assistant and tool-result messages. Duplicate entry ids are ignored.
 - Missing provider usage is recorded as unknown, never treated as confirmed zero.
