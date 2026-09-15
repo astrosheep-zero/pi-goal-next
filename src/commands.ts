@@ -28,7 +28,7 @@ export function registerGoalCommands(piLike: CommandPiLike, deps: CommandDeps): 
   piLike.registerCommand("goal", { description: "Manage the current goal", handler: async (raw: string, ctx?: { ui?: { notify(message: string, level?: string): void } }) => {
     const run = async (cmd: ReturnType<typeof parseGoalCommand>): Promise<string> => {
       const current = goalCommit.current();
-      const revision = current?.revision ?? 0;
+      const revision = current?.revision ?? goalCommit.getRevision();
       const finish = (r: Awaited<ReturnType<GoalCommitLike["commit"]>>, ok: string) => r.kind === "ok" ? ok : "Goal update failed.";
       switch (cmd.kind) {
         case "status": return summarize(current);
@@ -39,10 +39,8 @@ export function registerGoalCommands(piLike: CommandPiLike, deps: CommandDeps): 
           return r.kind === "ok" ? "Goal created." : "Goal update failed.";
         }
         case "edit": {
-          const previous = current;
-          const cleared = await goalCommit.commit({ type: "clear" }, revision);
-          if (cleared.kind !== "ok") return "Goal update failed.";
-          const r = await goalCommit.commit({ type: "create", id: newGoalId(), objective: cmd.objective as string, tokenBudget: previous?.goal.tokenBudget, maxContinuations: previous?.goal.maxContinuations }, cleared.snapshot?.revision ?? revision);
+          if (!current) return "Goal update failed.";
+          const r = await goalCommit.commit({ type: "replace", id: newGoalId(), objective: cmd.objective as string }, revision);
           if (r.kind === "ok" && r.snapshot) deps.send({ customType: "pi-goal-next/objective_updated", content: objectiveUpdatedPrompt(r.snapshot.goal), display: false, details: { goalId: r.snapshot.goal.id } }, { triggerTurn: true });
           return r.kind === "ok" ? "Goal edited." : "Goal update failed.";
         }

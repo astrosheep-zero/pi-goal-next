@@ -16,9 +16,17 @@ The extension uses the public Pi 0.85.1 event, session, message, and send APIs. 
 
 **Cannot guarantee:** Pi does not expose nested or subagent token usage consistently for every tool result.
 
-**What it does:** Counts nested usage only when it is present in `toolResult.usage`; missing usage is recorded as unknown. Top-level assistant and tool-result events are deduplicated by live message-object identity, since their session entry IDs do not yet exist during `message_end`. Journaled usage survives reload; historical events are not counted again.
+**What it does:** Counts nested usage only when it is present in `toolResult.usage`. In usage journal intents, omitted usage fields serialize as zero; an explicit `null` preserves existing unknown semantics. An absent entire Pi usage object remains unknown. Top-level assistant and tool-result events are deduplicated by live message-object identity, since their session entry IDs do not yet exist during `message_end`. Journaled usage survives reload; historical events are not counted again.
 
-**User sees:** The status line can show `unknown messages=N`, and budget totals can be lower than provider-side totals when nested usage was not reported.
+**User sees:** The status line can show `unknown messages=N`, and budget totals can be lower than provider-side totals when nested usage was not reported. If a usage journal write fails, automatic continuation is suppressed and the next message or settled event retries it. Pending, uncommitted usage is held in memory and cannot survive a reload or branch change.
+
+### Goal-owned run usage
+
+**Cannot guarantee:** Usage for an in-flight response cannot be split precisely at the instant a user pauses or replaces a goal.
+
+**What it does:** Attributes usage to the goal that owns a run. A goal's final completing run remains charged; later unrelated runs after it is complete, paused, or blocked do not charge that goal.
+
+**User sees:** Finishing, pausing, or blocking a goal does not cause later unrelated conversation usage to accumulate against it.
 
 ### Continuation message identity
 
@@ -28,13 +36,13 @@ The extension uses the public Pi 0.85.1 event, session, message, and send APIs. 
 
 **User sees:** If Pi stops emitting custom-message events, stale turns degrade to prompt self-termination only; subsequent continuation remains subject to normal checks.
 
-### Compaction extension content
+### Compaction and goal context
 
-**Cannot guarantee:** Pi may not accept extension-provided appended compaction content on every hook/version path.
+**Cannot guarantee:** Pi controls the content and timing of its normal conversation summary.
 
-**What it does:** The 0.85.1 hook accepts a `CompactionResult`; it returns the goal summary when the hook provides `preparation.firstKeptEntryId` and numeric `tokensBefore`. The defensive field check remains for older/newer hook variants. Continuation prompts remain self-contained.
+**What it does:** Does not override Pi's compaction summary. Goal state remains in a separate journal and is restored through `get_goal` and self-contained continuation prompts.
 
-**User sees:** After some compactions the normal goal summary may be absent from the compaction context, while the goal itself remains in the journal.
+**User sees:** Normal conversation compaction proceeds under Pi's standard behavior; the goal remains available independently of that summary.
 
 ## Additional implementation boundaries
 

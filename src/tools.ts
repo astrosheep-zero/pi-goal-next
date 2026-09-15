@@ -40,7 +40,7 @@ export function registerGoalTools(piLike: PiLike, deps: GoalToolDeps): void {
       if (!params || typeof params.objective !== "string" || !params.objective.trim()) return result("Invalid objective: a non-empty objective is required.");
       const current = goalCommit.current();
       if (current && current.goal.status !== "complete") return result("Cannot create goal: an unfinished goal already exists.");
-      const revision = current?.revision ?? 0;
+      const revision = current?.revision ?? goalCommit.getRevision();
       const intent: Intent = { type: "create", id: newGoalId(), objective: params.objective, tokenBudget: params.token_budget ?? null };
       const r = await goalCommit.commit(intent, revision);
       return result(r.kind === "ok" ? "Goal created." : commitMessage(r));

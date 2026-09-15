@@ -6,6 +6,115 @@ import { createContinuation } from "../src/continuation.ts";
 import { registerLifecycle } from "../src/lifecycle.ts";
 import { createFakePi } from "./support/fake-pi.ts";
 
+for (const status of ["complete", "paused", "blocked"] as const) {
+  test(`usage retains the completing run but excludes later ${status} conversations`, async () => {
+    const h = setup();
+    await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+    await h.fake.emit("agent_start");
+    await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "toolUse", usage: { input: 10 } } });
+    await h.goalCommit.commit({ type: "transition", to: status, by: "user", userRequest: "stop" }, h.goalCommit.current().revision);
+    await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 5 } } });
+    await h.fake.emit("agent_settled");
+    assert.equal(h.goalCommit.current().goal.usage.input, 15);
+    await h.fake.emit("agent_start");
+    await h.fake.emit("message_start", { message: { role: "user" } });
+    await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 100 } } });
+    await h.fake.emit("agent_settled");
+    assert.equal(h.goalCommit.current().goal.usage.input, 15);
+  });
+}
+
+test("goal created by a tool owns subsequent messages in the same run", async () => {
+  const h = setup();
+  await h.fake.emit("agent_start");
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "toolUse", usage: { input: 100 } } });
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+  await h.fake.emit("message_end", { message: { role: "toolResult", usage: { input: 2 } } });
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 3 } } });
+  assert.equal(h.goalCommit.current().goal.usage.input, 5);
+});
+
+test("replacement goal does not inherit usage from the old running goal", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "old", objective: "work" }, 0);
+  await h.fake.emit("agent_start");
+  await h.goalCommit.commit({ type: "replace", id: "new", objective: "new work" }, h.goalCommit.current().revision);
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 100 } } });
+  assert.equal(h.goalCommit.current().goal.usage.input, 0);
+  await h.fake.emit("agent_start");
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 7 } } });
+  assert.equal(h.goalCommit.current().goal.usage.input, 7);
+});
+
+for (const status of ["active", "paused", "complete"] as const) {
+  test(`compaction retains Pi's default summary for ${status} goals`, async () => {
+    const h = setup();
+    await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+    if (status !== "active") await h.goalCommit.commit({ type: "transition", to: status, by: "user", userRequest: "stop" }, h.goalCommit.current().revision);
+    const result = await h.fake.emit("session_before_compact", { preparation: { firstKeptEntryId: "tail", tokensBefore: 100000 } });
+    assert.equal(result, undefined);
+  });
+}
+
+test("usage retry cannot migrate to a concurrently replaced goal", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "old", objective: "work" }, 0);
+  await h.fake.emit("agent_start");
+  const original = h.goalCommit.commit;
+  let replaced = false;
+  h.goalCommit.commit = async (intent: any, revision: number) => {
+    if (intent.type === "usage" && !replaced) {
+      replaced = true;
+      await original({ type: "replace", id: "new", objective: "new work" }, revision);
+      return { kind: "conflict", snapshot: h.goalCommit.current() };
+    }
+    return original(intent, revision);
+  };
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 100 } } });
+  assert.equal(h.goalCommit.current().goal.id, "new");
+  assert.equal(h.goalCommit.current().goal.usage.input, 0);
+});
+
+test("explicit resume during an unrelated run starts accounting subsequent output", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+  await h.goalCommit.commit({ type: "transition", to: "paused", by: "user", userRequest: "pause" }, h.goalCommit.current().revision);
+  await h.fake.emit("agent_start");
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "toolUse", usage: { input: 100 } } });
+  await h.goalCommit.commit({ type: "transition", to: "active", by: "user", resetContinuations: true }, h.goalCommit.current().revision);
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 5 } } });
+  assert.equal(h.goalCommit.current().goal.usage.input, 5);
+});
+
+test("paused-start run cannot claim a replacement goal", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "old", objective: "work" }, 0);
+  await h.goalCommit.commit({ type: "transition", to: "paused", by: "user", userRequest: "pause" }, h.goalCommit.current().revision);
+  await h.fake.emit("agent_start");
+  await h.goalCommit.commit({ type: "replace", id: "new", objective: "new work" }, h.goalCommit.current().revision);
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 100 } } });
+  assert.equal(h.goalCommit.current().goal.usage.input, 0);
+});
+
+test("failed usage persistence retries at settlement and records once", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+  await h.fake.emit("agent_start");
+  const original = h.goalCommit.commit;
+  let fail = true;
+  h.goalCommit.commit = async (intent: any, revision: number) => intent.type === "usage" && fail ? { kind: "error", error: new Error("disk") } : original(intent, revision);
+  const message = { role: "assistant", stopReason: "stop", usage: { input: 7 } };
+  await h.fake.emit("message_end", { message });
+  await h.fake.emit("agent_settled");
+  assert.equal(h.fake.sentMessages.length, 0);
+  assert.equal(h.goalCommit.current().goal.usage.input, 0);
+  fail = false;
+  await h.fake.emit("agent_settled");
+  assert.equal(h.goalCommit.current().goal.usage.input, 7);
+  await h.fake.emit("message_end", { message });
+  assert.equal(h.goalCommit.current().goal.usage.input, 7);
+});
+
 function setup(entries: any[] = []) {
   const fake = createFakePi(entries);
   const store = { readBranch: () => fake.ctx.sessionManager.getBranch().filter((e: any) => e.type === "custom").map((e: any) => e.data), append: (entry: any) => fake.pi.appendEntry("pi-goal-next", entry) };

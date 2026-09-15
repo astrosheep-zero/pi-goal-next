@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { registerGoalTools } from "../src/tools.ts";
-import type { GoalSnapshot } from "../src/goal-commit.ts";
+import { createGoalCommit, type GoalSnapshot } from "../src/goal-commit.ts";
+import type { Entry } from "../src/goal.ts";
 
 const goal = { id: "g", objective: "ship", status: "active" as const, tokenBudget: null, maxContinuations: 25, continuationSeq: 0, createdAt: 0, updatedAt: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };
 function setup(snapshot: GoalSnapshot | null = { goal, revision: 3 }, response: any = { kind: "ok", snapshot: { goal, revision: 4 } }) {
   const tools: any[] = []; const calls: any[] = [];
-  registerGoalTools({ registerTool: tool => tools.push(tool) }, { goalCommit: { current: () => snapshot, commit: async (intent, revision) => { calls.push({ intent, revision }); return response; } } });
+  registerGoalTools({ registerTool: tool => tools.push(tool) }, { goalCommit: { current: () => snapshot, getRevision: () => snapshot?.revision ?? 0, commit: async (intent, revision) => { calls.push({ intent, revision }); return response; } } });
   return { tools, calls };
 }
 const invoke = (tool: any, params: any) => tool.execute("call", params);
@@ -59,4 +60,27 @@ test("paused is outside the schema enum and never commits", async () => {
   const out = await invoke(tools[2], { status: "paused" });
   assert.doesNotMatch(out.content[0].text, /Goal marked/);
   assert.equal(calls.length, 0);
+});
+
+test("create_goal recreates after clear using the current revision", async () => {
+  const entries: Entry[] = [{ type: "goal.created", version: 1, seq: 1, goal }];
+  const goalCommit = createGoalCommit({ readBranch: () => entries, append: entry => { entries.push(entry); } });
+  await goalCommit.commit({ type: "clear" }, goalCommit.getRevision());
+  const tools: any[] = [];
+  registerGoalTools({ registerTool: tool => tools.push(tool) }, { goalCommit });
+  assert.equal(await body(tools[1], { objective: "again" }), "Goal created.");
+  assert.equal(goalCommit.current()?.goal.objective, "again");
+});
+
+test("update_goal completes budget-limited goals but refuses paused and blocked goals", async () => {
+  for (const status of ["budget_limited", "paused", "blocked"] as const) {
+    const entries: Entry[] = [{ type: "goal.created", version: 1, seq: 1, goal: { ...goal, status } }];
+    const goalCommit = createGoalCommit({ readBranch: () => entries, append: entry => { entries.push(entry); } });
+    const tools: any[] = [];
+    registerGoalTools({ registerTool: tool => tools.push(tool) }, { goalCommit });
+    const response = await invoke(tools[2], { status: "complete" });
+    if (status === "budget_limited") assert.match(response.content[0].text, /Final token usage/);
+    else assert.match(response.content[0].text, /only an active or budget-limited goal/);
+    assert.equal(goalCommit.current()?.goal.status, status === "budget_limited" ? "complete" : status);
+  }
 });

@@ -1,11 +1,10 @@
-import { summarize } from "./goal.ts";
 import { budgetLimitPrompt } from "./prompts.ts";
 import type { Message } from "./accounting.ts";
 import type { GoalSnapshot, CommitResult } from "./goal-commit.ts";
 import type { Intent } from "./goal.ts";
 import { createAccounting } from "./accounting.ts";
 import type { Continuation } from "./continuation.ts";
-import type { SessionBeforeCompactEvent, MessageEndEvent, MessageStartEvent, InputEvent, AgentSettledEvent, SessionStartEvent } from "@earendil-works/pi-coding-agent";
+import type { MessageEndEvent, MessageStartEvent, InputEvent, AgentSettledEvent, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 
 export type LifecycleDeps = {
   goalCommit: { current(): GoalSnapshot | null; commit(intent: Intent, expectedRevision: number): Promise<CommitResult> };
@@ -17,13 +16,15 @@ export type LifecycleDeps = {
 
 export type PiEvents = { on(name: string, handler: (event: any, ctx: any) => unknown): void };
 export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
-  async function commitWithRetry(intent: Intent, attempts = 3): Promise<void> {
+  async function commitWithRetry(intent: Intent, attempts = 3, expectedGoalId?: string): Promise<boolean> {
     for (let i = 0; i < attempts; i++) {
       const snapshot = deps.goalCommit.current();
-      if (!snapshot) return;
+      if (!snapshot || (expectedGoalId !== undefined && snapshot.goal.id !== expectedGoalId)) return false;
       const result = await deps.goalCommit.commit(intent, snapshot.revision);
-      if (result.kind !== "conflict") return;
+      if (result.kind === "ok") return true;
+      if (result.kind === "error") return false;
     }
+    return false;
   }
   let pendingRebuild = false;
   const bootstrap = () => deps.rebuild();
@@ -35,6 +36,30 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
   let epoch = 0;
   let inputPending = false;
   let runSignal: AbortSignal | undefined;
+  // Keep ownership through completion so its remaining tool results/final reply
+  // count, but never transfer an old run's usage to a replacement goal.
+  let accountingGoalId: string | null = null;
+  let startGoalId: string | null = null;
+  const pendingUsage = new Map<string, { goalId: string; message: Message }>();
+  let usageFlush: Promise<boolean> | undefined;
+  async function flushUsage(): Promise<boolean> {
+    if (usageFlush) return usageFlush;
+    usageFlush = (async () => {
+      for (const [id, item] of pendingUsage) {
+        if (deps.goalCommit.current()?.goal.id !== item.goalId) { pendingUsage.delete(id); continue; }
+        const delta = deps.accounting.previewMessage(item.message);
+        if (!await commitWithRetry({ type: "usage", ...delta }, 3, item.goalId)) return false;
+        deps.accounting.recordMessage(item.message);
+        pendingUsage.delete(id);
+      }
+      return true;
+    })();
+    try { return await usageFlush; } finally { usageFlush = undefined; }
+  }
+  const eligibleGoalId = () => {
+    const goal = deps.goalCommit.current()?.goal;
+    return goal && (goal.status === "active" || goal.status === "budget_limited") ? goal.id : null;
+  };
   // message_end precedes SessionManager.appendMessage. Its object is authoritative;
   // no persisted entry ID exists yet. Deduplicate live events by object identity.
   const messageIds = new WeakMap<object, string>();
@@ -49,11 +74,16 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     lastAssistantStop = undefined;
     // Retain the signal: ctx.signal becomes undefined once the run is idle.
     runSignal = ctx.signal;
+    startGoalId = deps.goalCommit.current()?.goal.id ?? null;
+    accountingGoalId = eligibleGoalId();
   });
 
   pi.on("session_start", async (_event: SessionStartEvent, ctx: any) => {
     invalidate();
     inputPending = false;
+    accountingGoalId = null;
+    startGoalId = null;
+    pendingUsage.clear();
     await bootstrap();
     const snapshot = deps.goalCommit.current();
     if (snapshot?.goal?.status === "active") {
@@ -64,19 +94,12 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
   pi.on("session_before_tree", async (_event: any, ctx: any) => {
     invalidate();
     inputPending = false;
+    accountingGoalId = null;
+    startGoalId = null;
+    pendingUsage.clear();
     pendingRebuild = true;
     // Pi's tree hook does not expose the post-navigation branch; rebuild on the next event.
     void ctx;
-  });
-
-  pi.on("session_before_compact", async (event: SessionBeforeCompactEvent, _ctx: any) => {
-    const snapshot = deps.goalCommit.current();
-    if (!snapshot) return;
-    if (event?.preparation?.firstKeptEntryId && Number.isFinite(event.preparation.tokensBefore)) {
-      return { compaction: { summary: summarize(snapshot.goal), firstKeptEntryId: event.preparation.firstKeptEntryId, tokensBefore: event.preparation.tokensBefore } };
-    }
-    // Older Pi hooks may not support extension-provided compaction content.
-    return;
   });
 
   const before = async (_ctx: any) => { if (pendingRebuild) { pendingRebuild = false; await bootstrap(); } };
@@ -85,17 +108,20 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     const m = event.message;
     if (m.role !== "assistant" && m.role !== "toolResult") return;
     if (m.role === "assistant") lastAssistantStop = m.stopReason;
+    // A create_goal tool can establish ownership after agent_start.
+    const eligible = eligibleGoalId();
+    if (!accountingGoalId && (!startGoalId || startGoalId === eligible)) accountingGoalId = eligible;
+    if (!accountingGoalId || deps.goalCommit.current()?.goal.id !== accountingGoalId) return;
     let entryId = messageIds.get(m);
     if (!entryId) { entryId = `live-message:${++messageSeq}`; messageIds.set(m, entryId); }
     const message: Message = { ...m, entryId };
-    const recorded = deps.accounting.recordMessage(message);
-    if (recorded && !recorded.duplicate) {
-      const delta = recorded.delta;
-      await commitWithRetry({ type: "usage", input: delta.input, output: delta.output, cacheRead: delta.cacheRead, cacheWrite: delta.cacheWrite, unknownMessages: delta.unknownMessages });
-    }
+    if (!deps.accounting.hasMessage(entryId)) pendingUsage.set(entryId, { goalId: accountingGoalId, message });
+    await flushUsage();
   });
   pi.on("agent_settled", async (_event: AgentSettledEvent, ctx: any) => {
     await before(ctx);
+    if (!await flushUsage()) return; // No automatic work while usage persistence is unresolved.
+    accountingGoalId = null;
     const snapshot = deps.goalCommit.current();
     if (!snapshot) { steeredGoalId = null; steered = false; return; }
     const settledEpoch = epoch;
@@ -124,7 +150,12 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     await deps.continuation.onSettled(canSend);
   });
   pi.on("message_start", async (event: MessageStartEvent, ctx: any) => {
-    if (event.message.role === "user") { inputPending = false; invalidate(); }
+    if (event.message.role === "user") {
+      inputPending = false;
+      invalidate();
+      startGoalId = deps.goalCommit.current()?.goal.id ?? null;
+      accountingGoalId = eligibleGoalId();
+    }
     await before(ctx);
     await deps.continuation.onMessageStart(event.message);
   });

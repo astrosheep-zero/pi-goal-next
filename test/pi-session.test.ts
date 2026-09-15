@@ -9,9 +9,9 @@ import goalExtension from "../src/index.ts";
 
 // Exercise the real Pi 0.85 event dispatcher, session persistence, input queue,
 // and sendMessage implementation. Only model inference is replaced; no network.
-async function harness(t: any, reasons: string[]) {
+async function harness(t: any, reasons: string[], compaction: { enabled: boolean; reserveTokens?: number; keepRecentTokens?: number } = { enabled: false }) {
   const dir = await mkdtemp(join(tmpdir(), "pi-goal-timing-"));
-  const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } });
+  const settingsManager = SettingsManager.inMemory({ compaction, retry: { enabled: false } });
   const modelRuntime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: join(dir, "models.json"), modelsStorePath: join(dir, "models-store.json") });
   const model = modelRuntime.getModel("anthropic", "claude-sonnet-4-5")!;
   assert.ok(model);
@@ -129,4 +129,39 @@ test("real Pi: new user input has no continuation attached; normal reply can con
   assert.equal(atUserStart, 1);
   assert.equal(h.continuations().length, 2);
   assert.equal(h.calls(), 3);
+});
+
+test("real Pi: manual compaction uses Pi's default summary with a paused goal", async (t) => {
+  const h = await harness(t, ["error", "error", "error"], { enabled: false, reserveTokens: 1, keepRecentTokens: 1 });
+  await h.session.prompt("/goal Preserve the migration decision");
+  await h.settle();
+  await h.session.prompt("/goal pause");
+  await h.settle();
+  await h.session.prompt("Conversation detail: the migration keeps the old schema readable.");
+  await h.settle();
+  await h.session.prompt("Conversation detail: verify the rollback before release.");
+  await h.settle();
+
+  const session = h.session as any;
+  const defaultCompaction = session._runDefaultCompaction;
+  const calls: any[][] = [];
+  session._runDefaultCompaction = async (...args: any[]) => {
+    calls.push(args);
+    const preparation = args[0];
+    return {
+      summary: "Conversation detail: migration rollback is verified. Goal is present and paused.",
+      firstKeptEntryId: preparation.firstKeptEntryId,
+      tokensBefore: preparation.tokensBefore,
+    };
+  };
+  t.after(() => { session._runDefaultCompaction = defaultCompaction; });
+
+  const result = await h.session.compact();
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][7], "manual");
+  assert.match(result.summary, /migration rollback is verified/);
+  assert.match(result.summary, /Goal is present and paused/);
+  assert.ok(calls[0][0].messagesToSummarize.some((message: any) => JSON.stringify(message).includes("old schema readable")));
+  assert.ok(h.session.sessionManager.getBranch().some((entry: any) => entry.type === "custom" && entry.customType === "pi-goal-next" && entry.data.type === "goal.transition" && entry.data.to === "paused"));
 });

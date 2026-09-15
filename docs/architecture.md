@@ -10,7 +10,7 @@ Pi 0.85.1 extension package adding a long-running `/goal`. Behavior follows Code
 
 `active | paused | blocked | budget_limited | complete`
 
-- Model's `update_goal` accepts only: `complete` | `blocked`. The model self-audits; the host does not validate the declaration.
+- Model's `update_goal` accepts only: `complete` | `blocked`. `complete` is permitted from `active` and `budget_limited`, but not from `paused` or `blocked`. The model self-audits; the host does not validate the declaration.
 - `budget_limited` is set only by runtime/system paths (accounting).
 - `clear` is a journal entry `goal.cleared`; `fold()` yields null. Deletion is semantic.
 - One goal per session branch. `create_goal` refuses when an unfinished goal exists.
@@ -37,11 +37,12 @@ Dependency direction: `index → {tools, commands, lifecycle, ui} → {goal-comm
 
 ```ts
 current(): GoalSnapshot | null            // { goal, revision }
+getRevision(): number                     // available even when current() is null
 commit(intent, expectedRevision): Promise<{ ok, snapshot } | { conflict, snapshot }>
 subscribe(fn): unsubscribe
 ```
 
-Internally: check `revision === expectedRevision` and no pending → mark pending → `await store.append` → success: swap in, revision+1, notify; failure: release pending, report. Critical section wraps one append only — never verification, prompt building, or sendMessage.
+Internally: check `revision === expectedRevision` and no pending → mark pending → `await store.append` → success: swap in, revision+1, notify; failure: release pending, report. `getRevision()` remains available after a clear, so a clear→create sequence can use the current CAS revision. Critical section wraps one append only — never verification, prompt building, or sendMessage.
 
 ## Two counters
 
@@ -62,7 +63,7 @@ User messages win: `input` invalidates outstanding continuation attempts before 
 
 1. `session_start`: invalidate pending work, rebuild, and transition any restored `active` goal to `paused`. Never silently resume.
 2. `session_before_tree`: invalidate pending work; the next event rebuilds from the selected branch.
-3. `session_before_compact`: provide `goal.summarize()` text if the hook supports the required fields.
+3. Pi generates its normal conversation summary without a goal override. Goal state remains in its separate journal; `get_goal` and continuation prompts restore the relevant goal context.
 4. `agent_start`: reset completion state and capture `ctx.signal`. Retain that signal after Pi clears its current signal at idle, so cancellation during message/agent-end handlers still suppresses continuation.
 5. `message_end`: account the current message and capture its stop reason. Pi dispatches this hook **before** appending the message to SessionManager; never substitute the last persisted same-role message.
 6. `input` / user `message_start`: invalidate old scheduling and track input receipt through delivery.
@@ -72,8 +73,9 @@ Retry messages are separately accounted because each response costs real tokens.
 
 ## accounting rules
 
-- Dedup key: an in-memory ID assigned by WeakMap to each assistant/toolResult event message object. Session entry IDs do not yet exist at `message_end`. Usage deltas are journaled immediately; historical messages are not replayed into accounting on reload.
-- Only count usage Pi reports. Missing usage → recorded as `unknown`, never assumed zero.
+- Dedup key: an in-memory ID assigned by WeakMap to each assistant/toolResult event message object. Session entry IDs do not yet exist at `message_end`. Usage deltas are journaled immediately; historical messages are not replayed into accounting on reload. A message is acknowledged only after its usage commit succeeds. Failed writes remain pending for the next message or settled event; unresolved writes suppress automatic continuation.
+- Usage is attributed to the goal that owns the run. The final run completing a goal remains charged; later unrelated runs after complete, pause, or block do not charge that goal.
+- In usage journal intents, omitted usage fields serialize as zero; an explicit `null` preserves existing unknown semantics. An absent entire Pi usage object remains unknown.
 - toolResult.usage (nested/subagent usage) counts only when present; the coverage gap is disclosed in UI + limits.md.
 - Final completing turn IS accounted (same as both reference implementations).
 
@@ -93,7 +95,7 @@ The blocked audit is prompt-level only: the runtime does not count blocking turn
 
 `/goal` or `/goal status` · `/goal [--tokens N[k|M]] <objective>` (create; refuses while unfinished) · `/goal edit <objective>` · `/goal pause` · `/goal resume` · `/goal clear` · `/goal budget <tokens|none>` · `/goal turns <max-continuations>`.
 
-A successful `resume` atomically journals `resetContinuations: true` on the user transition to active, resetting the run's continuation count while preserving the objective, usage, budget, and historical entries. It also accepts an already-active goal. Exhausted token budgets and zero continuation allowances are reported without resuming. A successful `create` or `resume` calls `continuation.onSettled()` so an idle session starts pursuing immediately (Codex starts the turn directly). A successful `edit` sends `objectiveUpdatedPrompt(goal)` with `triggerTurn: true`; `pause` and `clear` send nothing (the active-status check stops continuation).
+A successful `resume` atomically journals `resetContinuations: true` on the user transition to active, resetting the run's continuation count while preserving the objective, usage, budget, and historical entries. It also accepts an already-active goal. Exhausted token budgets and zero continuation allowances are reported without resuming. A successful `create` or `resume` calls `continuation.onSettled()` so an idle session starts pursuing immediately (Codex starts the turn directly). A successful `edit` atomically appends `goal.replaced`, preserving limits without an intermediate clear, then sends `objectiveUpdatedPrompt(goal)` with `triggerTurn: true`; `pause` and `clear` send nothing (the active-status check stops continuation).
 
 ## Defaults
 
@@ -104,7 +106,7 @@ max continuations (turns): 25 · token budget: unset (opt-in) · the blocked-loo
 1. Stale already-sent continuation runs one more turn (no retraction, no selective abort).
 2. Subagent/nested tokens counted only when toolResult.usage present.
 3. Stale identity rides on continuation custom messages observed via `message_start`; if those events disappear, prompt self-termination is the fallback.
-4. Whether compaction hook accepts appended summary needs verification; harmless if not.
+4. Pi owns normal conversation-summary generation; goal context is restored separately from the journal through `get_goal` and continuation prompts.
 
 ## Testing
 

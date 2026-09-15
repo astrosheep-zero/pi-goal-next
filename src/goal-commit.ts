@@ -10,7 +10,7 @@ export type CommitResult =
   | { kind: "ok"; snapshot: GoalSnapshot | null }
   | { kind: "conflict"; snapshot: GoalSnapshot | null }
   | { kind: "error"; error: unknown };
-export type GoalCommitLike = Pick<ReturnType<typeof createGoalCommit>, "current" | "commit">;
+export type GoalCommitLike = Pick<ReturnType<typeof createGoalCommit>, "current" | "commit" | "getRevision">;
 
 export function createGoalCommit(store: GoalStore) {
   let bootstrapped = false;
@@ -34,13 +34,16 @@ export function createGoalCommit(store: GoalStore) {
     return goal ? { goal, revision } : null;
   }
 
+  function getRevision(): number { bootstrap(); return revision; }
+
   function entryFor(intent: Intent, next: Goal | null, previous: Goal | null): Entry {
     const seq = ++sequence;
     switch (intent.type) {
       case "create": return { type: "goal.created", version: 1, seq, goal: next! };
+      case "replace": return { type: "goal.replaced", version: 1, seq, goal: next! };
       case "clear": return { type: "goal.cleared", version: 1, seq };
       case "transition": return { type: "goal.transition", version: 1, seq, from: previous!.status, to: intent.to, by: intent.by, ...(intent.userRequest ? { userRequest: intent.userRequest } : {}), ...(intent.resetContinuations ? { resetContinuations: true } : {}) };
-      case "usage": return { type: "goal.usage", version: 1, seq, input: intent.input ?? null, output: intent.output ?? null, cacheRead: intent.cacheRead ?? null, cacheWrite: intent.cacheWrite ?? null, unknownMessages: intent.unknownMessages ?? 0 };
+      case "usage": return { type: "goal.usage", version: 1, seq, input: intent.input === undefined ? 0 : intent.input, output: intent.output === undefined ? 0 : intent.output, cacheRead: intent.cacheRead === undefined ? 0 : intent.cacheRead, cacheWrite: intent.cacheWrite === undefined ? 0 : intent.cacheWrite, unknownMessages: intent.unknownMessages ?? 0 };
       case "continuation_sent": return { type: "goal.continuation_sent", version: 1, seq, generation: intent.generation };
       case "stale_turn": return { type: "goal.stale_turn", version: 1, seq, generation: intent.generation };
       case "limit_config": return { type: "goal.limit_config", version: 1, seq, tokenBudget: intent.tokenBudget, maxContinuations: intent.maxContinuations };
@@ -89,5 +92,5 @@ export function createGoalCommit(store: GoalStore) {
     for (const subscriber of subscribers) subscriber(snapshot);
   }
 
-  return { current, commit, subscribe, rebuild };
+  return { current, getRevision, commit, subscribe, rebuild };
 }

@@ -19,6 +19,11 @@ export function createAccounting() {
   const unknown = new Set<string>();
   const deltas = new Map<string, Delta>();
 
+  function previewMessage(message: Message): Omit<Delta, "stale"> {
+    const u = message.usage;
+    return { input: n(u?.input) ?? 0, output: n(u?.output) ?? 0, cacheRead: n(u?.cacheRead) ?? 0, cacheWrite: n(u?.cacheWrite) ?? 0, unknownMessages: u ? 0 : 1 };
+  }
+
   function recordMessage(message: Message): { duplicate: boolean; delta: Delta } | null {
     if (!message || typeof message.entryId !== "string" || !message.entryId) return null;
     if (seen.has(message.entryId)) return { duplicate: true, delta: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0, stale: stale.has(message.entryId) } };
@@ -51,5 +56,5 @@ export function createAccounting() {
     const unknownText = u.unknownMessages || unknown.size ? `, unknown messages=${u.unknownMessages + unknown.size}` : "";
     return `usage input=${u.input} output=${u.output} cacheRead=${u.cacheRead} cacheWrite=${u.cacheWrite}${unknownText}${staleText}`;
   }
-  return { recordMessage, recordStale, settleTurn, summary };
+  return { previewMessage, hasMessage: (id: string) => seen.has(id), recordMessage, recordStale, settleTurn, summary };
 }

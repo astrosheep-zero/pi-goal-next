@@ -62,3 +62,52 @@ test("rebuild preserves subscribers and reloads the branch", async () => {
   assert.equal(seen.length, 2);
   assert.equal((seen[1] as { goal: { id: string } }).goal.id, "g2");
 });
+
+test("getRevision is available for an empty branch and survives failed commits", async () => {
+  let fail = true;
+  const c = createGoalCommit({ readBranch: () => [], append: async () => { if (fail) throw new Error("nope"); } });
+  assert.equal(c.current(), null);
+  assert.equal(c.getRevision(), 0);
+  assert.equal((await c.commit(create, c.getRevision())).kind, "error");
+  assert.equal(c.getRevision(), 0);
+  fail = false;
+  assert.equal((await c.commit(create, c.getRevision())).kind, "ok");
+});
+
+test("replace is one atomic journal entry, preserves limits, and replays", async () => {
+  const entries: Entry[] = [];
+  const store = { readBranch: () => entries, append: (entry: Entry) => { entries.push(entry); } };
+  const c = createGoalCommit(store);
+  await c.commit({ type: "create", id: "old", objective: "old", tokenBudget: 99, maxContinuations: 7 }, 0);
+  const oldRevision = c.current()!.revision;
+  const replaced = await c.commit({ type: "replace", id: "new", objective: "new" }, oldRevision);
+  assert.equal(replaced.kind, "ok");
+  assert.equal(entries.filter(entry => entry.type === "goal.replaced").length, 1);
+  assert.equal(c.current()!.goal.tokenBudget, 99);
+  assert.equal(c.current()!.goal.maxContinuations, 7);
+  assert.equal(createGoalCommit(store).current()!.goal.objective, "new");
+});
+
+test("replace append failure and validation leave the old goal intact", async () => {
+  let fail = true;
+  const goal = { id: "old", objective: "old", status: "active" as const, tokenBudget: 4, maxContinuations: 2, continuationSeq: 0, createdAt: 1, updatedAt: 1, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };
+  const entries: Entry[] = [{ type: "goal.created", version: 1, seq: 1, goal }];
+  const c = createGoalCommit({ readBranch: () => entries, append: async () => { if (fail) throw new Error("nope"); } });
+  assert.equal((await c.commit({ type: "replace", id: "new", objective: "new" }, 0)).kind, "error");
+  assert.equal(c.current()!.goal.id, "old");
+  fail = false;
+  assert.equal((await c.commit({ type: "replace", id: "new", objective: "   " }, 0)).kind, "error");
+  assert.equal(c.current()!.goal.id, "old");
+});
+
+test("sparse usage entries serialize undefined as zero while preserving explicit null", async () => {
+  const entries: Entry[] = [];
+  const c = createGoalCommit({ readBranch: () => entries, append: entry => { entries.push(entry); } });
+  await c.commit(create, 0);
+  await c.commit({ type: "usage", input: 3, cacheRead: null }, 1);
+  const usage = entries.find(entry => entry.type === "goal.usage") as Extract<Entry, { type: "goal.usage" }>;
+  assert.deepEqual(usage, { type: "goal.usage", version: 1, seq: 2, input: 3, output: 0, cacheRead: null, cacheWrite: 0, unknownMessages: 0 });
+  const replayed = createGoalCommit({ readBranch: () => entries, append: () => {} }).current()!.goal;
+  assert.deepEqual(replayed.usage, { input: 3, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 1 });
+  assert.deepEqual(replayed.usage, c.current()!.goal.usage);
+});

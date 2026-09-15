@@ -7,6 +7,7 @@ export type Goal = {
 };
 export type Entry =
   | { type: "goal.created"; version: 1; seq: number; goal: Goal }
+  | { type: "goal.replaced"; version: 1; seq: number; goal: Goal }
   | { type: "goal.transition"; version: 1; seq: number; from: Status; to: Status; by: Actor; userRequest?: string; resetContinuations?: boolean }
   | { type: "goal.cleared"; version: 1; seq: number }
   | { type: "goal.usage"; version: 1; seq: number; input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null; unknownMessages: number }
@@ -15,6 +16,7 @@ export type Entry =
   | { type: "goal.limit_config"; version: 1; seq: number; tokenBudget: number | null; maxContinuations: number };
 export type Intent =
   | { type: "create"; id: string; objective: string; tokenBudget?: number | null; maxContinuations?: number }
+  | { type: "replace"; id: string; objective: string }
   | { type: "transition"; to: Status; by: Actor; userRequest?: string; resetContinuations?: boolean }
   | { type: "clear" }
   | { type: "usage"; input?: number | null; output?: number | null; cacheRead?: number | null; cacheWrite?: number | null; unknownMessages?: number }
@@ -40,6 +42,10 @@ function safeAdd(a: number, b: number, name: string): number {
   return result;
 }
 export function transition(state: Goal | null, intent: Intent): Goal | null {
+  if (intent.type === "replace") {
+    if (!state) throw new GoalError("missing", "no goal exists");
+    return transition(null, { type: "create", id: intent.id, objective: intent.objective, tokenBudget: state.tokenBudget, maxContinuations: state.maxContinuations });
+  }
   if (intent.type === "create") {
     if (state && unfinished(state.status)) throw new GoalError("unfinished", "an unfinished goal already exists");
     if (typeof intent.objective !== "string" || !intent.objective.trim() || !intent.id) throw new GoalError("invalid", "objective and id are required");
@@ -54,7 +60,7 @@ export function transition(state: Goal | null, intent: Intent): Goal | null {
     if (!statuses.includes(intent.to)) throw new GoalError("invalid", "unknown status");
     if (intent.to === "paused" && !intent.userRequest?.trim()) throw new GoalError("forbidden", "paused requires user request evidence");
     if (intent.by === "agent" && !["complete", "blocked"].includes(intent.to)) throw new GoalError("forbidden", "agent cannot set this status");
-    if (intent.by === "agent" && intent.to === "complete" && state.status !== "active") throw new GoalError("forbidden", "agent can complete only an active goal");
+    if (intent.by === "agent" && intent.to === "complete" && !["active", "budget_limited"].includes(state.status)) throw new GoalError("forbidden", "agent can complete only an active or budget-limited goal");
     const reset = intent.resetContinuations === true;
     if (reset && (intent.by !== "user" || intent.to !== "active")) throw new GoalError("forbidden", "only user resume can reset continuations");
     if (reset && state.tokenBudget !== null && usageKeys.reduce((sum, key) => sum + state.usage[key], 0) >= state.tokenBudget) throw new GoalError("budget", "token budget exhausted; adjust /goal budget before resuming");
@@ -96,7 +102,7 @@ export function fold(entries: readonly Entry[]): Goal | null {
   let state: Goal | null = null;
   for (const entry of entries) {
     if (!entry.type.startsWith("goal.")) continue;
-    if (entry.type === "goal.created") state = { ...entry.goal };
+    if (entry.type === "goal.created" || entry.type === "goal.replaced") state = { ...entry.goal };
     else if (entry.type === "goal.cleared") state = null;
     else if (state && entry.type === "goal.transition") state = transition(state, { type: "transition", to: entry.to, by: entry.by, userRequest: entry.userRequest, resetContinuations: entry.resetContinuations });
     else if (state && entry.type === "goal.limit_config") state = transition(state, { type: "limit_config", tokenBudget: entry.tokenBudget, maxContinuations: entry.maxContinuations });
