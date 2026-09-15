@@ -61,7 +61,7 @@ User messages win: `hasPendingMessages()` check + CAS conflict as backstop.
 1. `session_start`: any restored `active` goal → commit a system transition to `paused` (the journal does not contain a separate `loaded` entry). Never silently resume; the continuation generation is not explicitly invalidated by this hook.
 2. `session_before_tree`: tell continuation to void generation; next event triggers rebuild from `getBranch()` via goal-commit.
 3. `session_before_compact`: append `goal.summarize()` text to the compaction if the hook allows (verify at implementation; continuation messages are self-contained regardless).
-4. `agent_settled`: commit the accounting verdict, then — if the current goal is `budget_limited` and this goal instance has not been steered yet — send `budgetLimitPrompt(goal)` with `triggerTurn: true`. Steering is sent once per goal instance (`steeredGoalId`/`steered` closure state, reset on a null snapshot or a new goal id). Then run `continuation.onSettled()`.
+4. `agent_settled`: commit the accounting verdict, then — if the current goal is `budget_limited` and this goal instance has not been steered yet — send `budgetLimitPrompt(goal)` with `triggerTurn: true`. Steering is sent once per goal instance (`steeredGoalId`/`steered` closure state, reset on a null snapshot or a new goal id). Then run `continuation.onSettled()`, except that it skips continuation when the previous turn ended error/aborted (structured `stopReason`; such turns produced no completed work).
 
 No other business. Retry needs no lifecycle handling — accounting dedupes by message id; retry messages have new ids and are honestly counted (they cost real tokens).
 

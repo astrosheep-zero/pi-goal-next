@@ -7,7 +7,7 @@ export type Usage = {
   cacheWrite?: number | null;
   [key: string]: unknown;
 };
-export type Message = { entryId: string; role: "assistant" | "toolResult"; usage?: Usage | null; toolName?: string };
+export type Message = { entryId: string; role: "assistant" | "toolResult"; usage?: Usage | null; toolName?: string; stopReason?: string };
 export type Delta = { input: number; output: number; cacheRead: number; cacheWrite: number; unknownMessages: number; stale: boolean };
 export type Verdict = { kind: "ok" } | { kind: "budget_limited"; reason: string };
 

@@ -85,6 +85,29 @@ test("user input blocks continuation and stale generation is accepted without an
   assert.equal(h.fake.sentMessages.length, 0);
 });
 
+test("error turn skips continuation; a later normal turn recovers", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+  h.fake.state.branch.push({ id: "m1", role: "assistant", usage: { input: 1 }, stopReason: "error" });
+  await h.fake.emit("message_end", { message: { id: "m1", role: "assistant", usage: { input: 1 }, stopReason: "error" } });
+  await h.fake.emit("agent_settled");
+  assert.equal(h.fake.sentMessages.length, 0);
+  h.fake.state.branch.push({ id: "m2", role: "assistant", usage: { input: 2, output: 3 }, stopReason: "stop" });
+  await h.fake.emit("message_end", { message: { id: "m2", role: "assistant", usage: { input: 2, output: 3 }, stopReason: "stop" } });
+  await h.fake.emit("agent_settled");
+  assert.equal(h.fake.sentMessages.length, 1);
+  assert.equal(h.fake.sentMessages[0].message.customType, "pi-goal-next/continuation");
+});
+
+test("aborted turn skips continuation", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+  h.fake.state.branch.push({ id: "m1", role: "assistant", usage: { input: 1 }, stopReason: "aborted" });
+  await h.fake.emit("message_end", { message: { id: "m1", role: "assistant", usage: { input: 1 }, stopReason: "aborted" } });
+  await h.fake.emit("agent_settled");
+  assert.equal(h.fake.sentMessages.length, 0);
+});
+
 test("usage-journal budget flip steers exactly once", async () => {
   const h = setup();
   await h.goalCommit.commit({ type: "create", id: "g", objective: "ship", tokenBudget: 5 }, 0);

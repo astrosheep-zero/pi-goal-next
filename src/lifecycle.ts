@@ -31,7 +31,9 @@ function messageFromEvent(event: any, ctx: any): Message | null {
   const m = candidate?.message ?? candidate ?? message;
   const entryId = m?.id ?? m?.entryId ?? message.id ?? message.entryId;
   // Entry identity is heuristic-by-position because branch entries may omit message ids.
-  return typeof entryId === "string" ? { entryId, role: message.role, usage: m?.usage ?? message.usage, toolName: m?.toolName ?? message.toolName } : null;
+  return typeof entryId === "string"
+    ? { entryId, role: message.role, usage: m?.usage ?? message.usage, toolName: m?.toolName ?? message.toolName, stopReason: m?.stopReason ?? message.stopReason }
+    : null;
 }
 
 export type PiEvents = { on(name: string, handler: (event: any, ctx: any) => unknown): void };
@@ -49,6 +51,8 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
   // Budget-limit steering is sent once per goal instance; reset on null branch or a new goal id.
   let steeredGoalId: string | null = null;
   let steered = false;
+  // Stop reason of the most recent assistant turn; gates continuation on normal completion.
+  let lastAssistantStop: string | undefined;
 
   pi.on("session_start", async (_event: SessionStartEvent, ctx: any) => {
     await bootstrap();
@@ -80,6 +84,7 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     await before(ctx);
     const message = messageFromEvent(event, ctx);
     if (!message) return;
+    if (message.role === "assistant") lastAssistantStop = message.stopReason;
     const recorded = deps.accounting.recordMessage(message);
     if (recorded && !recorded.duplicate) {
       const delta = recorded.delta;
@@ -103,6 +108,8 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
       steered = true;
       deps.send({ customType: "pi-goal-next/budget_limit", content: budgetLimitPrompt(goal), display: false, details: { goalId: goal.id } }, { triggerTurn: true });
     }
+    // Error/aborted turns produced no completed work; only continue after a normally-finished turn (Codex parity).
+    if (lastAssistantStop === "error" || lastAssistantStop === "aborted") return;
     await deps.continuation.onSettled();
   });
   pi.on("message_start", async (event: MessageStartEvent, ctx: any) => { await before(ctx); await deps.continuation.onMessageStart(event?.message ?? event); });
