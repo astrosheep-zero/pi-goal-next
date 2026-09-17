@@ -9,7 +9,7 @@ export type PiLike = { registerTool(tool: any): void };
 
 const text = (value: unknown) => typeof value === "string" ? value : JSON.stringify(value);
 const tokensUsed = (goal: Goal) => goal.usage.input + goal.usage.output + goal.usage.cacheRead + goal.usage.cacheWrite;
-function result(message: string, terminate = false): any { return { content: [{ type: "text", text: message }], ...(terminate ? { terminate: true } : {}) }; }
+function result(message: string): any { return { content: [{ type: "text", text: message }] }; }
 function commitMessage(r: CommitResult): string {
   if (r.kind === "conflict") return "Goal update conflict: goal changed; retry with the current goal.";
   if (r.kind === "error") return `Goal update failed: ${r.error instanceof Error ? r.error.message : text(r.error)}`;
@@ -57,11 +57,11 @@ export function registerGoalTools(piLike: PiLike, deps: GoalToolDeps): void {
       if (!current) return result("Goal update failed: no goal exists.");
       if (!expected) return result(`Invalid status: ${text(params?.status)} is not complete or blocked.`);
       const r = await goalCommit.commit({ type: "transition", to: status, by: "agent" }, current.revision);
-      if (r.kind !== "ok") return result(commitMessage(r), expected);
-      if (status === "blocked") return result("Goal marked blocked.", true);
+      if (r.kind !== "ok") return result(commitMessage(r));
+      if (status === "blocked") return result("Goal marked blocked.");
       const u = (r.snapshot?.goal ?? current.goal).usage;
       const total = u.input + u.output + u.cacheRead + u.cacheWrite;
-      return result(`Goal marked complete. Final token usage: input=${u.input} output=${u.output} cacheRead=${u.cacheRead} cacheWrite=${u.cacheWrite} (total=${total}).`, true);
+      return result(`Goal marked complete. Final token usage: input=${u.input} output=${u.output} cacheRead=${u.cacheRead} cacheWrite=${u.cacheWrite} (total=${total}).`);
     }
   });
 }

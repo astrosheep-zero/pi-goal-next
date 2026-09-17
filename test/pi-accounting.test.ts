@@ -59,22 +59,23 @@ async function harness(t: any, reasons: string[], toolComplete = false) {
   return { session, settle, continuations, beforePersist, calls: () => calls, beforeResponse: (handler: typeof beforeResponse) => { beforeResponse = handler; } };
 }
 
-test("real Pi: budget crossing before completion tool permits completion and excludes later unrelated input", async (t) => {
+test("real Pi: budget crossing before completion tool permits completion; final reply counts and later unrelated input does not", async (t) => {
   const h = await harness(t, ["toolUse", "stop", "stop"], true);
   await h.session.prompt("/goal --tokens 10 finish the task");
   await h.settle();
-  assert.equal(h.calls(), 1); // update_goal terminates the actual Pi tool loop
+  // No terminate flag: after update_goal succeeds the model still writes its closing reply.
+  assert.equal(h.calls(), 2);
   const entries = () => h.session.sessionManager.getBranch().filter((e: any) => e.type === "custom").map((e: any) => e.data);
   assert.ok(entries().some((e: any) => e.type === "goal.transition" && e.from === "budget_limited" && e.to === "complete"), JSON.stringify(entries()));
   const usage = () => entries().filter((e: any) => e.type === "goal.usage");
-  assert.equal(usage().reduce((n: number, e: any) => n + (e.input ?? 0) + (e.output ?? 0), 0), 11);
-  assert.equal(usage().length, 2); // assistant tool call plus its actual tool result
+  assert.equal(usage().length, 3); // tool-call assistant, its tool result, and the closing reply
   const result = h.session.sessionManager.getBranch().find((e: any) => e.message?.role === "toolResult") as any;
   assert.equal(result.message.isError, false);
   assert.match(result.message.content[0].text, /Goal marked complete/);
   await h.session.prompt("unrelated question");
   await h.settle();
-  assert.equal(h.calls(), 2);
-  assert.equal(usage().reduce((n: number, e: any) => n + (e.input ?? 0) + (e.output ?? 0), 0), 11);
+  assert.equal(h.calls(), 3);
+  // completing turn (11 + closing reply 22) counts; the unrelated run (33) does not.
+  assert.equal(usage().reduce((n: number, e: any) => n + (e.input ?? 0) + (e.output ?? 0), 0), 33);
   assert.equal(h.continuations().length, 1);
 });

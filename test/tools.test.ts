@@ -41,18 +41,18 @@ test("create_goal refuses a second unfinished goal", async () => {
   assert.match(await body(tools[1], { objective: "another" }), /unfinished/);
 });
 
-test("update_goal uses the current revision, conflicts, and terminates", async () => {
+test("update_goal uses the current revision and never terminates the turn", async () => {
   const conflict = setup({ goal, revision: 7 }, { kind: "conflict", snapshot: { goal, revision: 8 } });
   assert.match(await body(conflict.tools[2], { status: "blocked" }), /conflict/);
   assert.equal(conflict.calls[0].revision, 7);
   const complete = setup();
   const result = await invoke(complete.tools[2], { status: "complete" });
   assert.match(result.content[0].text, /Final token usage/);
-  assert.equal(result.terminate, true);
+  assert.equal("terminate" in result, false);
   assert.equal(complete.calls[0].intent.to, "complete");
   const blocked = await invoke(setup().tools[2], { status: "blocked" });
   assert.equal(blocked.content[0].text, "Goal marked blocked.");
-  assert.equal(blocked.terminate, true);
+  assert.equal("terminate" in blocked, false);
 });
 
 test("paused is outside the schema enum and never commits", async () => {
