@@ -10,7 +10,7 @@ Pi 0.85.1 extension package adding a long-running `/goal`. Behavior follows Code
 
 `active | paused | blocked | budget_limited | complete`
 
-- Model's `update_goal` accepts only: `complete` | `blocked`. `complete` is permitted from `active` and `budget_limited`, but not from `paused` or `blocked`. The model self-audits; the host does not validate the declaration.
+- Model's `update_goal` accepts only: `complete` | `blocked` | `paused` (paused at the user's explicit request, prompt-level only). `complete` is permitted from `active` and `budget_limited`, but not from `paused` or `blocked`. The model self-audits; the host does not validate the declaration.
 - `budget_limited` is set only by runtime/system paths (accounting).
 - `clear` is a journal entry `goal.cleared`; `fold()` yields null. Deletion is semantic.
 - One goal per session branch. `create_goal` refuses when an unfinished goal exists.
@@ -25,7 +25,7 @@ Pi 0.85.1 extension package adding a long-running `/goal`. Behavior follows Code
 | `accounting.ts` | usage attribution keyed by **message id** (assistant and toolResult separately), `settleTurn() → verdict: ok \| budget_limited`, `summary()` | triggering continuation, editing goal state directly (returns verdict; lifecycle commits it) |
 | `continuation.ts` | `generation` lease, `agent_settled` decision, commit-then-sendMessage, stale handling. The ONLY sender of continuation messages. | building UI, reading store, deciding acceptance |
 | `prompts.ts` | Pure: the three Codex-verbatim goal templates — `continuationPrompt(goal)`, `budgetLimitPrompt(goal)`, `objectiveUpdatedPrompt(goal)`; `escapeXmlText` applies to the objective only. | IO, model calls, host-side validation |
-| `tools.ts` | Codex-verbatim tool descriptions, TypeBox schema → `goalCommit.commit` → tool result. Three tools: get_goal / create_goal / update_goal. `update_goal` accepts only complete\|blocked and reports final usage on complete. | writing rules text, touching store/continuation |
+| `tools.ts` | Codex-verbatim tool descriptions, TypeBox schema → `goalCommit.commit` → tool result. Three tools: get_goal / create_goal / update_goal. `update_goal` accepts complete\|blocked\|paused and reports final usage on complete. | writing rules text, touching store/continuation |
 | `commands.ts` | `/goal` subcommands → goal-commit. | direct store access |
 | `lifecycle.ts` | Event ordering, live-message identities, run cancellation signal, and input/settlement fences. Session/branch/compaction policies plus budget-limit steering, see below. | holding Goal state |
 | `ui.ts` | status/widget text from `current()` + `accounting.summary()`. Read-only. | writes |

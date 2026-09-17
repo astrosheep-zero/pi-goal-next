@@ -20,7 +20,7 @@ test("registers the Codex tool schemas", () => {
   assert.deepEqual(Object.keys((tools[1].parameters as any).properties), ["objective", "token_budget"]);
   assert.equal((tools[1].parameters as any).properties.token_budget.minimum, 1);
   assert.deepEqual(Object.keys((tools[2].parameters as any).properties), ["status"]);
-  assert.deepEqual(((tools[2].parameters as any).properties.status.anyOf ?? []).map((s: any) => s.const), ["complete", "blocked"]);
+  assert.deepEqual(((tools[2].parameters as any).properties.status.anyOf ?? []).map((s: any) => s.const), ["complete", "blocked", "paused"]);
   assert.equal((tools[1].parameters as any).properties.objective.description, "Required. The concrete objective to start pursuing. This starts a new active goal when no goal exists or replaces the current goal when it is complete.");
   assert.equal((tools[1].parameters as any).properties.token_budget.description, "Positive token budget for the new goal. Omit unless explicitly requested.");
   assert.match((tools[2].parameters as any).properties.status.description, /at least three consecutive goal turns/);
@@ -55,11 +55,18 @@ test("update_goal uses the current revision and never terminates the turn", asyn
   assert.equal("terminate" in blocked, false);
 });
 
-test("paused is outside the schema enum and never commits", async () => {
+test("update_goal pauses an unfinished goal at the user's explicit request (Codex latest)", async () => {
   const { tools, calls } = setup();
   const out = await invoke(tools[2], { status: "paused" });
-  assert.doesNotMatch(out.content[0].text, /Goal marked/);
-  assert.equal(calls.length, 0);
+  assert.equal(out.content[0].text, "Goal marked paused.");
+  assert.deepEqual(calls[0].intent, { type: "transition", to: "paused", by: "agent" });
+  const entries: Entry[] = [{ type: "goal.created", version: 1, seq: 1, goal: { ...goal, status: "complete" as const } }];
+  const goalCommit = createGoalCommit({ readBranch: () => entries, append: entry => { entries.push(entry); } });
+  const completed: any[] = [];
+  registerGoalTools({ registerTool: tool => completed.push(tool) }, { goalCommit });
+  const refused = await invoke(completed[2], { status: "paused" });
+  assert.doesNotMatch(refused.content[0].text, /Goal marked/);
+  assert.equal(entries.length, 1);
 });
 
 test("create_goal recreates after clear using the current revision", async () => {

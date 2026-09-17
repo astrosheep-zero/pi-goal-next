@@ -67,8 +67,8 @@ export function transition(state: Goal | null, intent: Intent): Goal | null {
   }
   if (intent.type === "transition") {
     if (!statuses.includes(intent.to)) throw new GoalError("invalid", "unknown status");
-    if (intent.to === "paused" && !intent.userRequest?.trim()) throw new GoalError("forbidden", "paused requires user request evidence");
-    if (intent.by === "agent" && !["complete", "blocked"].includes(intent.to)) throw new GoalError("forbidden", "agent cannot set this status");
+    if (intent.to === "paused" && intent.by === "user" && !intent.userRequest?.trim()) throw new GoalError("forbidden", "paused requires user request evidence");
+    if (intent.by === "agent" && !["complete", "blocked", "paused"].includes(intent.to)) throw new GoalError("forbidden", "agent cannot set this status");
     if (intent.by === "agent" && intent.to === "complete" && !["active", "budget_limited"].includes(state.status)) throw new GoalError("forbidden", "agent can complete only an active or budget-limited goal");
     const reset = intent.resetContinuations === true;
     if (reset && (intent.by !== "user" || intent.to !== "active")) throw new GoalError("forbidden", "only user resume can reset continuations");
