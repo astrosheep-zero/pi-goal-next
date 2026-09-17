@@ -69,20 +69,35 @@ test("zero continuation allowance refuses resume explicitly", async () => {
   assert.equal(h.kicks(), 0);
 });
 
-test("create kicks and edit uses one atomic replace commit", async () => {
+test("create kicks; bare create with an unfinished goal updates the objective in place (Codex set semantics)", async () => {
   const created = setup(null);
   assert.equal(await created.command.handler("brand new"), "Goal created.");
   assert.equal(created.kicks(), 1);
   assert.equal(created.sent.length, 0);
-  const initial = { ...goal, tokenBudget: 5000, maxContinuations: 7 };
-  const edited = setup({ goal: initial, revision: 4 });
-  assert.equal(await edited.command.handler("edit revised"), "Goal edited.");
-  assert.deepEqual(edited.calls[0].intent, { type: "replace", id: edited.calls[0].intent.id, objective: "revised" });
-  assert.equal(edited.calls.length, 1);
-  assert.equal(edited.sent.length, 1);
-  assert.equal(edited.sent[0].message.customType, "pi-goal-next/objective_updated");
-  assert.deepEqual(edited.sent[0].message.details, { goalId: "g" });
-  assert.deepEqual(edited.sent[0].options, { triggerTurn: true });
+  const initial = { ...goal, tokenBudget: 5000, maxContinuations: 7, status: "paused" as const, usage: { ...goal.usage, input: 12, output: 3 } };
+  const updated = setup({ goal: initial, revision: 4 });
+  assert.equal(await updated.command.handler("revised"), "Goal updated.");
+  assert.deepEqual(updated.calls[0].intent, { type: "update_objective", objective: "revised" });
+  assert.equal(updated.calls.length, 1);
+  assert.equal(updated.kicks(), 0);
+  assert.equal(updated.sent.length, 1);
+  assert.equal(updated.sent[0].message.customType, "pi-goal-next/objective_updated");
+  assert.deepEqual(updated.sent[0].message.details, { goalId: "g" });
+  assert.deepEqual(updated.sent[0].options, { triggerTurn: true });
+});
+
+test("bare create with --tokens on an unfinished goal also updates the budget", async () => {
+  const initial = { ...goal, tokenBudget: 5000 };
+  const h = setup({ goal: initial, revision: 4 });
+  assert.equal(await h.command.handler("--tokens 200 revised"), "Goal updated.");
+  assert.deepEqual(h.calls[0].intent, { type: "update_objective", objective: "revised", tokenBudget: 200 });
+});
+
+test("create with a complete goal starts a fresh goal", async () => {
+  const h = setup({ goal: { ...goal, status: "complete" as const }, revision: 4 });
+  assert.equal(await h.command.handler("next mission"), "Goal created.");
+  assert.equal(h.calls[0].intent.type, "create");
+  assert.equal(h.kicks(), 1);
 });
 
 test("clear then recreate uses the accumulated revision", async () => {
@@ -96,22 +111,26 @@ test("clear then recreate uses the accumulated revision", async () => {
   assert.deepEqual(entries.map(entry => entry.type), ["goal.created", "goal.cleared", "goal.created"]);
 });
 
-test("edit command atomically replaces and replays through the store", async () => {
-  const initial = { ...goal, tokenBudget: 80, maxContinuations: 6 };
+test("edit command updates the objective in place and replays through the store", async () => {
+  const initial = { ...goal, tokenBudget: 80, maxContinuations: 6, status: "paused" as const, usage: { ...goal.usage, input: 30, output: 7 } };
   const entries: Entry[] = [{ type: "goal.created", version: 1, seq: 1, goal: initial }];
   const store = { readBranch: () => entries, append: (entry: Entry) => { entries.push(entry); } };
   const goalCommit = createGoalCommit(store);
   let command: any;
   registerGoalCommands({ registerCommand: (_name, c) => { command = c; } }, { goalCommit, send: () => {}, kick: async () => {} });
   assert.equal(await command.handler("edit revised"), "Goal edited.");
-  assert.deepEqual(entries.map(entry => entry.type), ["goal.created", "goal.replaced"]);
+  assert.deepEqual(entries.map(entry => entry.type), ["goal.created", "goal.objective_updated"]);
   const replayed = createGoalCommit(store).current()!.goal;
   assert.equal(replayed.objective, "revised");
+  assert.equal(replayed.id, initial.id);
+  assert.equal(replayed.status, "paused");
   assert.equal(replayed.tokenBudget, 80);
   assert.equal(replayed.maxContinuations, 6);
+  assert.equal(replayed.usage.input, 30);
+  assert.equal(replayed.usage.output, 7);
 });
 
-test("edit command append failure leaves the old goal", async () => {
+test("in-place update append failure leaves the old goal and objective", async () => {
   const initial = { ...goal, tokenBudget: 80, maxContinuations: 6 };
   const entries: Entry[] = [{ type: "goal.created", version: 1, seq: 1, goal: initial }];
   const goalCommit = createGoalCommit({ readBranch: () => entries, append: async () => { throw new Error("disk full"); } });

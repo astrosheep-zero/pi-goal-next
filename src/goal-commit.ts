@@ -41,6 +41,7 @@ export function createGoalCommit(store: GoalStore) {
     switch (intent.type) {
       case "create": return { type: "goal.created", version: 1, seq, goal: next! };
       case "replace": return { type: "goal.replaced", version: 1, seq, goal: next! };
+      case "update_objective": return { type: "goal.objective_updated", version: 1, seq, objective: intent.objective };
       case "clear": return { type: "goal.cleared", version: 1, seq };
       case "transition": return { type: "goal.transition", version: 1, seq, from: previous!.status, to: intent.to, by: intent.by, ...(intent.userRequest ? { userRequest: intent.userRequest } : {}), ...(intent.resetContinuations ? { resetContinuations: true } : {}) };
       case "usage": return { type: "goal.usage", version: 1, seq, input: intent.input === undefined ? 0 : intent.input, output: intent.output === undefined ? 0 : intent.output, cacheRead: intent.cacheRead === undefined ? 0 : intent.cacheRead, cacheWrite: intent.cacheWrite === undefined ? 0 : intent.cacheWrite, unknownMessages: intent.unknownMessages ?? 0 };

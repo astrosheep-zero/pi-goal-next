@@ -8,6 +8,7 @@ export type Goal = {
 export type Entry =
   | { type: "goal.created"; version: 1; seq: number; goal: Goal }
   | { type: "goal.replaced"; version: 1; seq: number; goal: Goal }
+  | { type: "goal.objective_updated"; version: 1; seq: number; objective: string }
   | { type: "goal.transition"; version: 1; seq: number; from: Status; to: Status; by: Actor; userRequest?: string; resetContinuations?: boolean }
   | { type: "goal.cleared"; version: 1; seq: number }
   | { type: "goal.usage"; version: 1; seq: number; input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null; unknownMessages: number }
@@ -17,6 +18,7 @@ export type Entry =
 export type Intent =
   | { type: "create"; id: string; objective: string; tokenBudget?: number | null; maxContinuations?: number }
   | { type: "replace"; id: string; objective: string }
+  | { type: "update_objective"; objective: string; tokenBudget?: number | null }
   | { type: "transition"; to: Status; by: Actor; userRequest?: string; resetContinuations?: boolean }
   | { type: "clear" }
   | { type: "usage"; input?: number | null; output?: number | null; cacheRead?: number | null; cacheWrite?: number | null; unknownMessages?: number }
@@ -56,6 +58,13 @@ export function transition(state: Goal | null, intent: Intent): Goal | null {
   }
   if (!state) throw new GoalError("missing", "no goal exists");
   if (intent.type === "clear") return null;
+  if (intent.type === "update_objective") {
+    if (typeof intent.objective !== "string" || !intent.objective.trim()) throw new GoalError("invalid", "objective is required");
+    if (intent.tokenBudget !== undefined && intent.tokenBudget !== null && (!Number.isFinite(intent.tokenBudget) || intent.tokenBudget < 0)) throw new GoalError("invalid", "invalid limits");
+    // Codex thread/goal/set semantics: update the objective in place, preserving
+    // status, limits, and cumulative usage on the same goal id.
+    return { ...state, objective: intent.objective.trim(), ...(intent.tokenBudget !== undefined ? { tokenBudget: intent.tokenBudget } : {}) };
+  }
   if (intent.type === "transition") {
     if (!statuses.includes(intent.to)) throw new GoalError("invalid", "unknown status");
     if (intent.to === "paused" && !intent.userRequest?.trim()) throw new GoalError("forbidden", "paused requires user request evidence");
@@ -104,6 +113,7 @@ export function fold(entries: readonly Entry[]): Goal | null {
     if (!entry.type.startsWith("goal.")) continue;
     if (entry.type === "goal.created" || entry.type === "goal.replaced") state = { ...entry.goal };
     else if (entry.type === "goal.cleared") state = null;
+    else if (state && entry.type === "goal.objective_updated") state = transition(state, { type: "update_objective", objective: entry.objective });
     else if (state && entry.type === "goal.transition") state = transition(state, { type: "transition", to: entry.to, by: entry.by, userRequest: entry.userRequest, resetContinuations: entry.resetContinuations });
     else if (state && entry.type === "goal.limit_config") state = transition(state, { type: "limit_config", tokenBudget: entry.tokenBudget, maxContinuations: entry.maxContinuations });
     else if (state && entry.type === "goal.continuation_sent") state = transition(state, { type: "continuation_sent", generation: entry.generation });

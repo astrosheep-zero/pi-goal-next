@@ -85,7 +85,7 @@ Retry messages are separately accounted because each response costs real tokens.
 
 - `continuationPrompt(goal)` (`continuation.md`): the objective inside `<objective>` as user-provided data; budget block; "Work from evidence"; "Fidelity"; completion audit; blocked audit (three consecutive goal turns); closing rules.
 - `budgetLimitPrompt(goal)` (`budget_limit.md`): sent once per goal instance when the status flips to `budget_limited`.
-- `objectiveUpdatedPrompt(goal)` (`objective_updated.md`): sent after a successful `/goal edit`; uses `<untrusted_objective>` and reports remaining tokens as `unknown` when no budget is set.
+- `objectiveUpdatedPrompt(goal)` (`objective_updated.md`): sent after a successful in-place objective update (`/goal <new>` or `/goal edit` on an unfinished goal); uses `<untrusted_objective>` and reports remaining tokens as `unknown` when no budget is set.
 
 Substitution is trivial `{{ name }}` replacement. `escapeXmlText` (`&`→`&amp;`, `<`→`&lt;`, `>`→`&gt;`) is applied to the objective only. `tokens_used` is `input+output+cacheRead+cacheWrite`; `token_budget` is the budget or `none`; `remaining_tokens` is `max(0, budget-used)`, or `unbounded` (continuation) / `unknown` (objective update) without a budget; `time_used_seconds` is `floor((Date.now()-createdAt)/1000)`.
 
@@ -93,9 +93,9 @@ The blocked audit is prompt-level only: the runtime does not count blocking turn
 
 ## Commands
 
-`/goal` or `/goal status` · `/goal [--tokens N[k|M]] <objective>` (create; refuses while unfinished) · `/goal edit <objective>` · `/goal pause` · `/goal resume` · `/goal clear` · `/goal budget <tokens|none>` · `/goal turns <max-continuations>`.
+`/goal` or `/goal status` · `/goal [--tokens N[k|M]] <objective>` (create, or in-place objective update while unfinished — Codex `thread/goal/set` semantics) · `/goal edit <objective>` (same in-place update) · `/goal pause` · `/goal resume` · `/goal clear` · `/goal budget <tokens|none>` · `/goal turns <max-continuations>`.
 
-A successful `resume` atomically journals `resetContinuations: true` on the user transition to active, resetting the run's continuation count while preserving the objective, usage, budget, and historical entries. It also accepts an already-active goal. Exhausted token budgets and zero continuation allowances are reported without resuming. A successful `create` or `resume` calls `continuation.onSettled()` so an idle session starts pursuing immediately (Codex starts the turn directly). A successful `edit` atomically appends `goal.replaced`, preserving limits without an intermediate clear, then sends `objectiveUpdatedPrompt(goal)` with `triggerTurn: true`; `pause` and `clear` send nothing (the active-status check stops continuation).
+A successful `resume` atomically journals `resetContinuations: true` on the user transition to active, resetting the run's continuation count while preserving the objective, usage, budget, and historical entries. It also accepts an already-active goal. Exhausted token budgets and zero continuation allowances are reported without resuming. A successful `create` or `resume` calls `continuation.onSettled()` so an idle session starts pursuing immediately (Codex starts the turn directly). A successful in-place objective update atomically appends `goal.objective_updated`, preserving the goal id, status, limits, and cumulative usage, then sends `objectiveUpdatedPrompt(goal)` with `triggerTurn: true`; `pause` and `clear` send nothing (the active-status check stops continuation).
 
 ## Defaults
 

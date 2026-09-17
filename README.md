@@ -29,7 +29,7 @@ For a project-local extension, add the package path to the project's Pi extensio
 /goal clear
 ```
 
-Creating a goal is refused while an unfinished goal exists. `edit` atomically replaces the current goal, preserves its limits, and records `goal.replaced`; it never exposes an intermediate cleared state. `pause` and `resume` are user commands; `clear` removes the goal semantically from the journal. Token suffixes accepted by create are `k` and `M` (for example, `200k` and `2M`).
+With no goal, or when the current goal is complete, `/goal <objective>` creates a fresh goal. With an unfinished goal it instead updates the objective in place (Codex `thread/goal/set` semantics): same goal id, status, token budget, and cumulative usage are preserved, and an `objective_updated` steering message is sent. `/goal edit <objective>` performs the same in-place update. The model-facing `create_goal` tool still refuses while an unfinished goal exists. `pause` and `resume` are user commands; `clear` removes the goal semantically from the journal. Token suffixes accepted by create are `k` and `M` (for example, `200k` and `2M`).
 
 ## Model tools
 

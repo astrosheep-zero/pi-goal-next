@@ -33,14 +33,21 @@ export function registerGoalCommands(piLike: CommandPiLike, deps: CommandDeps): 
       switch (cmd.kind) {
         case "status": return summarize(current);
         case "create": {
-          if (current && current.goal.status !== "complete") return "Cannot create goal: an unfinished goal already exists.";
+          // Codex thread/goal/set semantics: an unfinished goal's objective is
+          // updated in place (same goal id, usage/budget preserved); a missing
+          // or complete goal starts a fresh one.
+          if (current && current.goal.status !== "complete") {
+            const r = await goalCommit.commit({ type: "update_objective", objective: cmd.objective as string, ...(cmd.tokenBudget === undefined || cmd.tokenBudget === null ? {} : { tokenBudget: cmd.tokenBudget }) }, revision);
+            if (r.kind === "ok" && r.snapshot) deps.send({ customType: "pi-goal-next/objective_updated", content: objectiveUpdatedPrompt(r.snapshot.goal), display: false, details: { goalId: r.snapshot.goal.id } }, { triggerTurn: true });
+            return r.kind === "ok" ? "Goal updated." : "Goal update failed.";
+          }
           const r = await goalCommit.commit({ type: "create", id: newGoalId(), objective: cmd.objective as string, tokenBudget: cmd.tokenBudget ?? null }, revision);
           if (r.kind === "ok") await deps.kick();
           return r.kind === "ok" ? "Goal created." : "Goal update failed.";
         }
         case "edit": {
           if (!current) return "Goal update failed.";
-          const r = await goalCommit.commit({ type: "replace", id: newGoalId(), objective: cmd.objective as string }, revision);
+          const r = await goalCommit.commit({ type: "update_objective", objective: cmd.objective as string }, revision);
           if (r.kind === "ok" && r.snapshot) deps.send({ customType: "pi-goal-next/objective_updated", content: objectiveUpdatedPrompt(r.snapshot.goal), display: false, details: { goalId: r.snapshot.goal.id } }, { triggerTurn: true });
           return r.kind === "ok" ? "Goal edited." : "Goal update failed.";
         }

@@ -88,6 +88,37 @@ test("replace is one atomic journal entry, preserves limits, and replays", async
   assert.equal(createGoalCommit(store).current()!.goal.objective, "new");
 });
 
+test("update_objective preserves id, status, limits, and usage through replay", async () => {
+  const entries: Entry[] = [];
+  const store = { readBranch: () => entries, append: (e: Entry) => { entries.push(e); } };
+  const c = createGoalCommit(store);
+  const created = await c.commit({ type: "create", id: "g1", objective: "old", tokenBudget: 100 }, 0);
+  assert.equal(created.kind, "ok");
+  await c.commit({ type: "usage", input: 30, output: 5 }, 1);
+  const updated = await c.commit({ type: "update_objective", objective: "new" }, 2);
+  assert.equal(updated.kind, "ok");
+  assert.equal(entries.filter(entry => entry.type === "goal.objective_updated").length, 1);
+  const replayed = createGoalCommit(store).current()!.goal;
+  assert.equal(replayed.id, "g1");
+  assert.equal(replayed.objective, "new");
+  assert.equal(replayed.status, "active");
+  assert.equal(replayed.tokenBudget, 100);
+  assert.equal(replayed.usage.input, 30);
+  assert.equal(replayed.usage.output, 5);
+});
+
+test("update_objective append failure and validation leave the old objective", async () => {
+  let fail = true;
+  const goal = { id: "old", objective: "old", status: "active" as const, tokenBudget: 4, maxContinuations: 2, continuationSeq: 0, createdAt: 1, updatedAt: 1, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };
+  const entries: Entry[] = [{ type: "goal.created", version: 1, seq: 1, goal }];
+  const c = createGoalCommit({ readBranch: () => entries, append: async () => { if (fail) throw new Error("nope"); } });
+  assert.equal((await c.commit({ type: "update_objective", objective: "new" }, 0)).kind, "error");
+  assert.equal(c.current()!.goal.objective, "old");
+  fail = false;
+  assert.equal((await c.commit({ type: "update_objective", objective: "   " }, 0)).kind, "error");
+  assert.equal(c.current()!.goal.objective, "old");
+});
+
 test("replace append failure and validation leave the old goal intact", async () => {
   let fail = true;
   const goal = { id: "old", objective: "old", status: "active" as const, tokenBudget: 4, maxContinuations: 2, continuationSeq: 0, createdAt: 1, updatedAt: 1, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };
