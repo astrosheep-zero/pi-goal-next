@@ -6,7 +6,7 @@ import type { Goal } from "../src/goal.ts";
 const now = Date.now();
 const goal = (overrides: Partial<Goal> = {}): Goal => ({
   id: "g", objective: "do <work> & <more>", status: "active", tokenBudget: null, maxContinuations: 25,
-  continuationSeq: 0, createdAt: now, updatedAt: now,
+  continuationSeq: 0, createdAt: now, updatedAt: now, timeUsedSeconds: 0,
   usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, unknownMessages: 0 }, ...overrides
 });
 
@@ -32,9 +32,9 @@ test("objective_updated and budget_limit match their Codex variants", () => {
   assert.match(untrusted, /<untrusted_objective>\ndo &lt;work&gt; &amp; &lt;more&gt;\n<\/untrusted_objective>/);
   assert.match(untrusted, /Tokens remaining: unbounded/);
   assert.match(objectiveUpdatedPrompt(goal({ tokenBudget: 100 })), /Tokens remaining: 90/);
-  const limited = budgetLimitPrompt(goal({ createdAt: Date.now() }));
-  assert.match(limited, /Seconds since goal created: 0/);
-  assert.match(budgetLimitPrompt(goal({ createdAt: Date.now() - 5000 })), /Seconds since goal created: [4-6]/);
+  const limited = budgetLimitPrompt(goal({ timeUsedSeconds: 0 }));
+  assert.match(limited, /Time spent pursuing goal: 0 seconds/);
+  assert.match(budgetLimitPrompt(goal({ timeUsedSeconds: 5 })), /Time spent pursuing goal: 5 seconds/);
   assert.match(limited, /Token budget: none/);
 });
 

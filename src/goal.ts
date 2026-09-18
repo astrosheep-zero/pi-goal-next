@@ -3,6 +3,7 @@ export type Actor = "user" | "agent" | "system";
 export type Goal = {
   id: string; objective: string; status: Status; tokenBudget: number | null;
   maxContinuations: number; continuationSeq: number; createdAt: number; updatedAt: number;
+  timeUsedSeconds: number;
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number; unknownMessages: number };
 };
 export type Entry =
@@ -11,7 +12,7 @@ export type Entry =
   | { type: "goal.objective_updated"; version: 1; seq: number; objective: string }
   | { type: "goal.transition"; version: 1; seq: number; from: Status; to: Status; by: Actor; userRequest?: string; resetContinuations?: boolean }
   | { type: "goal.cleared"; version: 1; seq: number }
-  | { type: "goal.usage"; version: 1; seq: number; input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null; unknownMessages: number }
+  | { type: "goal.usage"; version: 1; seq: number; input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null; unknownMessages: number; seconds?: number }
   | { type: "goal.continuation_sent"; version: 1; seq: number; generation: number }
   | { type: "goal.stale_turn"; version: 1; seq: number; generation: number }
   | { type: "goal.limit_config"; version: 1; seq: number; tokenBudget: number | null; maxContinuations: number };
@@ -21,7 +22,7 @@ export type Intent =
   | { type: "update_objective"; objective: string; tokenBudget?: number | null }
   | { type: "transition"; to: Status; by: Actor; userRequest?: string; resetContinuations?: boolean }
   | { type: "clear" }
-  | { type: "usage"; input?: number | null; output?: number | null; cacheRead?: number | null; cacheWrite?: number | null; unknownMessages?: number }
+  | { type: "usage"; input?: number | null; output?: number | null; cacheRead?: number | null; cacheWrite?: number | null; unknownMessages?: number; seconds?: number }
   | { type: "continuation_sent"; generation: number }
   | { type: "stale_turn"; generation: number }
   | { type: "limit_config"; tokenBudget: number | null; maxContinuations: number };
@@ -54,7 +55,7 @@ export function transition(state: Goal | null, intent: Intent): Goal | null {
     const max = intent.maxContinuations ?? 25;
     if (!Number.isInteger(max) || max < 0 || (intent.tokenBudget !== undefined && intent.tokenBudget !== null && (!Number.isFinite(intent.tokenBudget) || intent.tokenBudget < 0))) throw new GoalError("invalid", "invalid limits");
     const now = Date.now();
-    return { id: intent.id, objective: intent.objective.trim(), status: "active", tokenBudget: intent.tokenBudget ?? null, maxContinuations: max, continuationSeq: 0, createdAt: now, updatedAt: now, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };
+    return { id: intent.id, objective: intent.objective.trim(), status: "active", tokenBudget: intent.tokenBudget ?? null, maxContinuations: max, continuationSeq: 0, createdAt: now, updatedAt: now, timeUsedSeconds: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };
   }
   if (!state) throw new GoalError("missing", "no goal exists");
   if (intent.type === "clear") return null;
@@ -96,7 +97,7 @@ export function transition(state: Goal | null, intent: Intent): Goal | null {
       cacheWrite: safeAdd(state.usage.cacheWrite, delta.cacheWrite, "cacheWrite usage"),
       unknownMessages: safeAdd(state.usage.unknownMessages, unknown, "unknownMessages")
     };
-    const next = { ...state, usage: nextUsage };
+    const next = { ...state, timeUsedSeconds: safeAdd(state.timeUsedSeconds ?? 0, safeDelta(intent.seconds, "time used seconds"), "time used seconds"), usage: nextUsage };
     // Arithmetic limits use budget_limited.
     if (next.status === "active" && limitsExceeded(next)) next.status = "budget_limited";
     return next;
@@ -111,16 +112,16 @@ export function fold(entries: readonly Entry[]): Goal | null {
   let state: Goal | null = null;
   for (const entry of entries) {
     if (!entry.type.startsWith("goal.")) continue;
-    if (entry.type === "goal.created" || entry.type === "goal.replaced") state = { ...entry.goal };
+    if (entry.type === "goal.created" || entry.type === "goal.replaced") state = { timeUsedSeconds: 0, ...entry.goal };
     else if (entry.type === "goal.cleared") state = null;
     else if (state && entry.type === "goal.objective_updated") state = transition(state, { type: "update_objective", objective: entry.objective });
     else if (state && entry.type === "goal.transition") state = transition(state, { type: "transition", to: entry.to, by: entry.by, userRequest: entry.userRequest, resetContinuations: entry.resetContinuations });
     else if (state && entry.type === "goal.limit_config") state = transition(state, { type: "limit_config", tokenBudget: entry.tokenBudget, maxContinuations: entry.maxContinuations });
     else if (state && entry.type === "goal.continuation_sent") state = transition(state, { type: "continuation_sent", generation: entry.generation });
-    else if (state && entry.type === "goal.usage") state = transition(state, { type: "usage", input: entry.input, output: entry.output, cacheRead: entry.cacheRead, cacheWrite: entry.cacheWrite, unknownMessages: entry.unknownMessages });
+    else if (state && entry.type === "goal.usage") state = transition(state, { type: "usage", input: entry.input, output: entry.output, cacheRead: entry.cacheRead, cacheWrite: entry.cacheWrite, unknownMessages: entry.unknownMessages, seconds: entry.seconds });
     else if (state && entry.type === "goal.stale_turn") state = transition(state, { type: "stale_turn", generation: entry.generation });
   }
   return state;
 }
 export const newGoalId = (): string => `goal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-export function summarize(goal: Goal): string { const u = goal.usage; return `[goal ${goal.id}] ${goal.status}: ${goal.objective} (continuations ${goal.continuationSeq}/${goal.maxContinuations}, budget ${goal.tokenBudget ?? "none"}, usage in=${u.input} out=${u.output} cacheRead=${u.cacheRead} cacheWrite=${u.cacheWrite} unknown=${u.unknownMessages})`; }
+export function summarize(goal: Goal): string { const u = goal.usage; return `[goal ${goal.id}] ${goal.status}: ${goal.objective} (continuations ${goal.continuationSeq}/${goal.maxContinuations}, budget ${goal.tokenBudget ?? "none"}, time ${goal.timeUsedSeconds ?? 0}s, usage in=${u.input} out=${u.output} cacheRead=${u.cacheRead} cacheWrite=${u.cacheWrite} unknown=${u.unknownMessages})`; }

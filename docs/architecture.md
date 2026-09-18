@@ -23,6 +23,7 @@ Pi 0.85.1 extension package adding a long-running `/goal`. Behavior follows Code
 | `goal-commit.ts` | Sole write path: `current()`, `commit(intent, expectedRevision)`, `subscribe(fn)`. CAS + single pending slot; owns `revision`. | scheduling, accounting math, UI, Pi ctx |
 | `store.ts` | `readBranch()` (from `ctx.sessionManager.getBranch()`, filter `goal.*`), `append(entry)`, `assertVersion`. IO only. | state decisions, caching current |
 | `accounting.ts` | usage attribution keyed by **message id** (assistant and toolResult separately), `settleTurn() → verdict: ok \| budget_limited`, `summary()` | triggering continuation, editing goal state directly (returns verdict; lifecycle commits it) |
+| `clock.ts` | Active wall-clock baseline (`sync`/`peek`/`markAccounted`), Codex `GoalWallClockAccounting` equivalent. Pure, injectable `now`. | journaling, goal state |
 | `continuation.ts` | `generation` lease, `agent_settled` decision, commit-then-sendMessage, stale handling. The ONLY sender of continuation messages. | building UI, reading store, deciding acceptance |
 | `prompts.ts` | Pure: the three Codex-verbatim goal templates — `continuationPrompt(goal)`, `budgetLimitPrompt(goal)`, `objectiveUpdatedPrompt(goal)`; `escapeXmlText` applies to the objective only. | IO, model calls, host-side validation |
 | `tools.ts` | Codex-verbatim tool descriptions, TypeBox schema → `goalCommit.commit` → tool result. Three tools: get_goal / create_goal / update_goal. `update_goal` accepts complete\|blocked\|paused and reports final usage on complete. | writing rules text, touching store/continuation |
@@ -76,6 +77,7 @@ Retry messages are separately accounted because each response costs real tokens.
 - Dedup key: an in-memory ID assigned by WeakMap to each assistant/toolResult event message object. Session entry IDs do not yet exist at `message_end`. Usage deltas are journaled immediately; historical messages are not replayed into accounting on reload. A message is acknowledged only after its usage commit succeeds. Failed writes remain pending for the next message or settled event; unresolved writes suppress automatic continuation.
 - Usage is attributed to the goal that owns the run. The final run completing a goal remains charged; later unrelated runs after complete, pause, or block do not charge that goal.
 - In usage journal intents, omitted usage fields serialize as zero; an explicit `null` preserves existing unknown semantics. An absent entire Pi usage object remains unknown.
+- Time accounting follows Codex: a wall-clock baseline runs only while the goal is `active` (paused/budget-limited/complete/blocked time never accrues, and pause→resume gaps are excluded because every committed transition re-syncs the clock via `goalCommit.subscribe`). The accrued whole-second delta rides the first usage commit of each flush as the `seconds` field; the baseline advances only after that commit is durable, so failed writes keep the full delta for the retry. A flush with no pending message usage still journals idle active time as a time-only `goal.usage` entry (token fields zero), and user `message_start` triggers such a flush. `goal.timeUsedSeconds` is the journaled cumulative total; pre-feature journal snapshots without the field fold to `0`.
 - toolResult.usage (nested/subagent usage) counts only when present; the coverage gap is disclosed in UI + limits.md.
 - Final completing turn IS accounted (same as both reference implementations).
 
@@ -87,7 +89,7 @@ Retry messages are separately accounted because each response costs real tokens.
 - `budgetLimitPrompt(goal)` (`budget_limit.md`): sent once per goal instance when the status flips to `budget_limited`.
 - `objectiveUpdatedPrompt(goal)` (`objective_updated.md`): sent after a successful in-place objective update (`/goal <new>` or `/goal edit` on an unfinished goal); uses `<untrusted_objective>` and reports remaining tokens as `unbounded` when no budget is set.
 
-Substitution is trivial `{{ name }}` replacement. `escapeXmlText` (`&`→`&amp;`, `<`→`&lt;`, `>`→`&gt;`) is applied to the objective only. `tokens_used` is `input+output+cacheRead+cacheWrite`; `token_budget` is the budget or `none`; `remaining_tokens` is `max(0, budget-used)`, or `unbounded` without a budget; `time_used_seconds` is `floor((Date.now()-createdAt)/1000)`.
+Substitution is trivial `{{ name }}` replacement. `escapeXmlText` (`&`→`&amp;`, `<`→`&lt;`, `>`→`&gt;`) is applied to the objective only. `tokens_used` is `input+output+cacheRead+cacheWrite`; `token_budget` is the budget or `none`; `remaining_tokens` is `max(0, budget-used)`, or `unbounded` without a budget; `time_used_seconds` is the goal's journaled active wall-clock total (`timeUsedSeconds`).
 
 The blocked audit is prompt-level only: the runtime does not count blocking turns and never rejects a `blocked` declaration.
 

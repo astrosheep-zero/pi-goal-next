@@ -4,6 +4,7 @@ import { createGoalCommit } from "../src/goal-commit.ts";
 import { createAccounting } from "../src/accounting.ts";
 import { createContinuation } from "../src/continuation.ts";
 import { registerLifecycle } from "../src/lifecycle.ts";
+import { createGoalClock } from "../src/clock.ts";
 import { createFakePi } from "./support/fake-pi.ts";
 
 for (const status of ["complete", "paused", "blocked"] as const) {
@@ -115,18 +116,19 @@ test("failed usage persistence retries at settlement and records once", async ()
   assert.equal(h.goalCommit.current().goal.usage.input, 7);
 });
 
-function setup(entries: any[] = []) {
+function setup(entries: any[] = [], now: () => number = Date.now) {
   const fake = createFakePi(entries);
   const store = { readBranch: () => fake.ctx.sessionManager.getBranch().filter((e: any) => e.type === "custom").map((e: any) => e.data), append: (entry: any) => fake.pi.appendEntry("pi-goal-next", entry) };
   let committed = createGoalCommit(store);
   const goalCommit: any = { current: () => committed.current(), commit: (i: any, r: number) => committed.commit(i, r), subscribe: (fn: any) => committed.subscribe(fn) };
   const accounting = createAccounting();
+  const clock = createGoalClock(now);
   const continuation = createContinuation({
     getSnapshot: goalCommit.current, commit: (i, r) => goalCommit.commit(i, r),
     send: (m, o) => fake.pi.sendMessage(m, o), isIdle: fake.pi.isIdle, hasPendingMessages: fake.pi.hasPendingMessages, buildPrompt: () => "continue"
   });
-  registerLifecycle(fake.pi, { goalCommit, accounting, continuation, send: (m: any, o: any) => fake.pi.sendMessage(m, o), rebuild: () => { committed = createGoalCommit(store); } });
-  return { fake, goalCommit, accounting };
+  registerLifecycle(fake.pi, { goalCommit, accounting, clock, continuation, send: (m: any, o: any) => fake.pi.sendMessage(m, o), rebuild: () => { committed = createGoalCommit(store); } });
+  return { fake, goalCommit, accounting, clock };
 }
 
 for (const stopReason of ["error", "aborted", "toolUse", undefined]) {
@@ -340,4 +342,74 @@ test("verdict-commit budget flip steers exactly once", async () => {
   assert.equal(steers().length, 1);
   await h.fake.emit("agent_settled");
   assert.equal(steers().length, 1);
+});
+
+test("active run journals accrued wall-clock time on its first usage commit", async () => {
+  let now = 0;
+  const h = setup([], () => now);
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+  await h.fake.emit("agent_start");
+  now = 3000;
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 1 } } });
+  const usage = () => h.fake.state.branch.filter((e: any) => e.type === "custom" && e.data.type === "goal.usage").map((e: any) => e.data);
+  assert.equal(usage().at(-1).seconds, 3);
+  assert.equal(h.goalCommit.current().goal.timeUsedSeconds, 3);
+
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 2 } } });
+  assert.equal(usage().at(-1).seconds, 0);
+  assert.equal(h.goalCommit.current().goal.timeUsedSeconds, 3);
+});
+
+test("paused gaps are excluded after subscribed pause and resume commits", async () => {
+  let now = 0;
+  const h = setup([], () => now);
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+  await h.goalCommit.commit({ type: "transition", to: "paused", by: "user", userRequest: "pause" }, h.goalCommit.current().revision);
+  now = 10000;
+  await h.goalCommit.commit({ type: "transition", to: "active", by: "user", resetContinuations: true }, h.goalCommit.current().revision);
+  now = 12800;
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 1 } } });
+  assert.equal(h.goalCommit.current().goal.timeUsedSeconds, 2);
+});
+
+test("user message_start journals idle active time without token usage", async () => {
+  let now = 0;
+  const h = setup([], () => now);
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+  now = 2200;
+  await h.fake.emit("message_start", { message: { role: "user" } });
+  const entry = h.fake.state.branch.findLast((e: any) => e.type === "custom" && e.data.type === "goal.usage")?.data;
+  assert.equal(entry.seconds, 2);
+  assert.deepEqual({ input: entry.input, output: entry.output, cacheRead: entry.cacheRead, cacheWrite: entry.cacheWrite, unknownMessages: entry.unknownMessages }, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 });
+  assert.equal(h.goalCommit.current().goal.timeUsedSeconds, 2);
+});
+
+test("failed usage persistence keeps the full clock delta for retry", async () => {
+  let now = 0;
+  const h = setup([], () => now);
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+  await h.fake.emit("agent_start");
+  now = 4100;
+  const original = h.goalCommit.commit;
+  let fail = true;
+  h.goalCommit.commit = async (intent: any, revision: number) => intent.type === "usage" && fail ? { kind: "error", error: new Error("disk") } : original(intent, revision);
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 1 } } });
+  assert.equal(h.goalCommit.current().goal.timeUsedSeconds, 0);
+  fail = false;
+  await h.fake.emit("agent_settled");
+  assert.equal(h.goalCommit.current().goal.timeUsedSeconds, 4);
+  const usage = h.fake.state.branch.filter((e: any) => e.type === "custom" && e.data.type === "goal.usage").map((e: any) => e.data);
+  assert.equal(usage.at(-1).seconds, 4);
+});
+
+test("budget-limit steering prompt reports accumulated wall-clock time", async () => {
+  let now = 0;
+  const h = setup([], () => now);
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work", tokenBudget: 5 }, 0);
+  await h.fake.emit("agent_start");
+  now = 2500;
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 5 } } });
+  await h.fake.emit("agent_settled");
+  const prompt = h.fake.sentMessages.find((m: any) => m.message.customType === "pi-goal-next/budget_limit");
+  assert.match(prompt.message.content, /Time spent pursuing goal: 2 seconds/);
 });

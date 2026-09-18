@@ -5,7 +5,7 @@ import { createGoalCommit, type GoalSnapshot } from "../src/goal-commit.ts";
 import { createContinuation } from "../src/continuation.ts";
 import type { Entry } from "../src/goal.ts";
 
-const goal = { id: "g", objective: "ship", status: "active" as const, tokenBudget: null, maxContinuations: 25, continuationSeq: 0, createdAt: 0, updatedAt: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };
+const goal = { id: "g", objective: "ship", status: "active" as const, tokenBudget: null, maxContinuations: 25, continuationSeq: 0, createdAt: 0, updatedAt: 0, timeUsedSeconds: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };
 function setup(snapshot: GoalSnapshot | null = { goal, revision: 4 }) {
   const calls: any[] = []; const sent: any[] = []; let kicks = 0; let command: any;
   registerGoalCommands({ registerCommand: (_name, c) => { command = c; } }, {

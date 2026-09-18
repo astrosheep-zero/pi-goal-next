@@ -4,7 +4,7 @@ import { registerGoalTools } from "../src/tools.ts";
 import { createGoalCommit, type GoalSnapshot } from "../src/goal-commit.ts";
 import type { Entry } from "../src/goal.ts";
 
-const goal = { id: "g", objective: "ship", status: "active" as const, tokenBudget: null, maxContinuations: 25, continuationSeq: 0, createdAt: 0, updatedAt: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };
+const goal = { id: "g", objective: "ship", status: "active" as const, tokenBudget: null, maxContinuations: 25, continuationSeq: 0, createdAt: 0, updatedAt: 0, timeUsedSeconds: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };
 function setup(snapshot: GoalSnapshot | null = { goal, revision: 3 }, response: any = { kind: "ok", snapshot: { goal, revision: 4 } }) {
   const tools: any[] = []; const calls: any[] = [];
   registerGoalTools({ registerTool: tool => tools.push(tool) }, { goalCommit: { current: () => snapshot, getRevision: () => snapshot?.revision ?? 0, commit: async (intent, revision) => { calls.push({ intent, revision }); return response; } } });
@@ -26,12 +26,12 @@ test("registers the Codex tool schemas", () => {
   assert.match((tools[2].parameters as any).properties.status.description, /at least three consecutive goal turns/);
 });
 
-test("get_goal reports remaining budget and elapsed seconds", async () => {
+test("get_goal reports remaining budget and time used", async () => {
   const { tools } = setup({ goal: { ...goal, tokenBudget: 100, usage: { ...goal.usage, input: 30 } }, revision: 3 });
   const out = JSON.parse(await body(tools[0], {}));
   assert.equal(out.revision, 3);
   assert.equal(out.remainingBudget, 70);
-  assert.equal(typeof out.elapsedSeconds, "number");
+  assert.equal(out.timeUsedSeconds, 0);
   assert.equal(JSON.parse(await body(setup().tools[0], {})).remainingBudget, null);
   assert.equal(await body(setup(null).tools[0], {}), "No active goal.");
 });

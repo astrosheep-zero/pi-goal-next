@@ -3,6 +3,7 @@ import { append, readBranch } from "./store.ts";
 import { createGoalCommit } from "./goal-commit.ts";
 import type { GoalStore } from "./goal-commit.ts";
 import { createAccounting } from "./accounting.ts";
+import { createGoalClock } from "./clock.ts";
 import { createContinuation } from "./continuation.ts";
 import { continuationPrompt } from "./prompts.ts";
 import { registerLifecycle } from "./lifecycle.ts";
@@ -20,6 +21,7 @@ export default function (pi: ExtensionAPI): void {
   };
   const goalCommit = createGoalCommit(store);
   const accounting = createAccounting();
+  const clock = createGoalClock();
   const continuation = createContinuation({
     getSnapshot: () => goalCommit.current(),
     commit: (intent, revision) => goalCommit.commit(intent, revision),
@@ -33,6 +35,6 @@ export default function (pi: ExtensionAPI): void {
   };
   registerGoalTools(pi, { goalCommit });
   registerGoalCommands(pi, { goalCommit, send, kick: () => continuation.onSettled() });
-  registerLifecycle(pi, { goalCommit, accounting, continuation, send, rebuild: () => goalCommit.rebuild() });
+  registerLifecycle(pi, { goalCommit, accounting, clock, continuation, send, rebuild: () => goalCommit.rebuild() });
   registerUi({ goalCommit, accounting, getContext: () => ctx });
 }

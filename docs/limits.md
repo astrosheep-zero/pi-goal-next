@@ -28,6 +28,14 @@ The extension uses the public Pi 0.85.1 event, session, message, and send APIs. 
 
 **User sees:** Finishing, pausing, or blocking a goal does not cause later unrelated conversation usage to accumulate against it.
 
+### Active time accounting
+
+**Cannot guarantee:** The wall-clock baseline is in-memory. Active time accrued since the last accounting point cannot survive a reload, crash, or branch change, and the idle tail between the last run and a manual `/goal pause` or `/goal clear` is never journaled.
+
+**What it does:** Follows Codex `GoalWallClockAccounting`: seconds accrue only while the goal is `active` (paused, budget-limited, blocked, and complete periods are excluded, as are pause→resume gaps). The accrued delta is journaled as `seconds` on the next usage flush — message boundaries, settlement, or a user message after idle — and the baseline advances only after the write is durable.
+
+**User sees:** `timeUsedSeconds` is cumulative active wall time, including idle time between runs while the goal stayed active. It can undercount by the unjournaled tail after the last accounting point.
+
 ### Continuation message identity
 
 **Cannot guarantee:** Pi may stop emitting message events for custom messages in a future boundary.

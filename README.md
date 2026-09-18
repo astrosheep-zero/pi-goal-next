@@ -33,9 +33,9 @@ With no goal, or when the current goal is complete, `/goal <objective>` creates 
 
 ## Model tools
 
-- `get_goal` returns the current snapshot plus `remainingBudget` and `elapsedSeconds`, or reports that no goal exists.
+- `get_goal` returns the current snapshot plus `remainingBudget` and `timeUsedSeconds` (cumulative active wall-clock seconds, Codex semantics), or reports that no goal exists.
 - `create_goal` creates an active goal after an explicit request. It accepts `objective` and optional `token_budget` (a positive integer).
-- `update_goal` accepts `complete`, `blocked`, or `paused` after the model's self-audit. `paused` is honored only at the user's explicit request (prompt-level rule; the host enforces only the state machine). `complete` is permitted from `active` and `budget_limited`, not `paused` or `blocked`; the host does not validate declarations. On `complete` the result reports the final token usage.
+- `update_goal` accepts `complete`, `blocked`, or `paused` after the model's self-audit. `paused` is honored only at the user's explicit request (prompt-level rule; the host enforces only the state machine). `complete` is permitted from `active` and `budget_limited`, not `paused` or `blocked`; the host does not validate declarations. On `complete` the result reports the final token usage and active time used.
 
 The prompt text is copied byte-for-byte from Codex Goal (`continuation.md`, `budget_limit.md`, `objective_updated.md`); the only deletion is Codex's `update_plan` "Progress visibility" paragraph, because Pi has no `update_plan` tool. Continuation prompts state the objective inside `<objective>` as user-provided data and carry the budget, evidence, fidelity, completion-audit, and blocked-audit rules. The three-consecutive-turn blocked audit is prompt-level guidance; the runtime does not enforce it.
 

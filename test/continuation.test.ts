@@ -4,7 +4,7 @@ import { createContinuation, type ContinuationDeps } from "../src/continuation.t
 import type { Goal } from "../src/goal.ts";
 
 function goal(overrides: Partial<Goal> = {}): Goal {
-  return { id: "g1", objective: "do it", status: "active", tokenBudget: null, maxContinuations: 3, continuationSeq: 0, createdAt: 1, updatedAt: 1, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 }, ...overrides };
+  return { id: "g1", objective: "do it", status: "active", tokenBudget: null, maxContinuations: 3, continuationSeq: 0, createdAt: 1, updatedAt: 1, timeUsedSeconds: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 }, ...overrides };
 }
 function harness(g = goal()) {
   let snapshot: { goal: Goal; revision: number } | null = { goal: g, revision: 0 };

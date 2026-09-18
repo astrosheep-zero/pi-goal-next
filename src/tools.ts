@@ -26,7 +26,7 @@ export function registerGoalTools(piLike: PiLike, deps: GoalToolDeps): void {
       const snapshot = goalCommit.current();
       if (!snapshot) return result("No active goal.");
       const goal = snapshot.goal;
-      return result(JSON.stringify({ ...snapshot, remainingBudget: goal.tokenBudget === null ? null : Math.max(0, goal.tokenBudget - tokensUsed(goal)), elapsedSeconds: Math.floor((Date.now() - goal.createdAt) / 1000) }));
+      return result(JSON.stringify({ ...snapshot, remainingBudget: goal.tokenBudget === null ? null : Math.max(0, goal.tokenBudget - tokensUsed(goal)), timeUsedSeconds: goal.timeUsedSeconds ?? 0 }));
     }
   });
   piLike.registerTool({
@@ -62,7 +62,8 @@ export function registerGoalTools(piLike: PiLike, deps: GoalToolDeps): void {
       if (status === "paused") return result("Goal marked paused.");
       const u = (r.snapshot?.goal ?? current.goal).usage;
       const total = u.input + u.output + u.cacheRead + u.cacheWrite;
-      return result(`Goal marked complete. Final token usage: input=${u.input} output=${u.output} cacheRead=${u.cacheRead} cacheWrite=${u.cacheWrite} (total=${total}).`);
+      const secs = (r.snapshot?.goal ?? current.goal).timeUsedSeconds ?? 0;
+      return result(`Goal marked complete. Final token usage: input=${u.input} output=${u.output} cacheRead=${u.cacheRead} cacheWrite=${u.cacheWrite} (total=${total}). Time used: ${secs} seconds.`);
     }
   });
 }

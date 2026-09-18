@@ -8,7 +8,7 @@ const create = { type: "create" as const, id: "g1", objective: "ship it" };
 test("bootstrap from branch and CAS conflict", async () => {
   const seed = { type: "goal.created" as const, version: 1 as const, seq: 4, goal: {
     id: "old", objective: "existing", status: "active" as const, tokenBudget: null, maxContinuations: 25,
-    continuationSeq: 0, createdAt: 1, updatedAt: 1, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 }
+    continuationSeq: 0, createdAt: 1, updatedAt: 1, timeUsedSeconds: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 }
   } };
   const c = createGoalCommit({ readBranch: () => [seed], append: async () => {} });
   assert.equal(c.current()?.goal.id, "old");
@@ -55,7 +55,7 @@ test("rebuild preserves subscribers and reloads the branch", async () => {
   await c.commit(create, 0);
   branch = [{ type: "goal.created", version: 1, seq: 1, goal: {
     id: "g2", objective: "new branch", status: "active", tokenBudget: null, maxContinuations: 25,
-    continuationSeq: 0, createdAt: 1, updatedAt: 1,
+    continuationSeq: 0, createdAt: 1, updatedAt: 1, timeUsedSeconds: 0,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 }
   } }];
   c.rebuild();
@@ -109,7 +109,7 @@ test("update_objective preserves id, status, limits, and usage through replay", 
 
 test("update_objective append failure and validation leave the old objective", async () => {
   let fail = true;
-  const goal = { id: "old", objective: "old", status: "active" as const, tokenBudget: 4, maxContinuations: 2, continuationSeq: 0, createdAt: 1, updatedAt: 1, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };
+  const goal = { id: "old", objective: "old", status: "active" as const, tokenBudget: 4, maxContinuations: 2, continuationSeq: 0, createdAt: 1, updatedAt: 1, timeUsedSeconds: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };
   const entries: Entry[] = [{ type: "goal.created", version: 1, seq: 1, goal }];
   const c = createGoalCommit({ readBranch: () => entries, append: async () => { if (fail) throw new Error("nope"); } });
   assert.equal((await c.commit({ type: "update_objective", objective: "new" }, 0)).kind, "error");
@@ -121,7 +121,7 @@ test("update_objective append failure and validation leave the old objective", a
 
 test("replace append failure and validation leave the old goal intact", async () => {
   let fail = true;
-  const goal = { id: "old", objective: "old", status: "active" as const, tokenBudget: 4, maxContinuations: 2, continuationSeq: 0, createdAt: 1, updatedAt: 1, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };
+  const goal = { id: "old", objective: "old", status: "active" as const, tokenBudget: 4, maxContinuations: 2, continuationSeq: 0, createdAt: 1, updatedAt: 1, timeUsedSeconds: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };
   const entries: Entry[] = [{ type: "goal.created", version: 1, seq: 1, goal }];
   const c = createGoalCommit({ readBranch: () => entries, append: async () => { if (fail) throw new Error("nope"); } });
   assert.equal((await c.commit({ type: "replace", id: "new", objective: "new" }, 0)).kind, "error");
@@ -137,7 +137,7 @@ test("sparse usage entries serialize undefined as zero while preserving explicit
   await c.commit(create, 0);
   await c.commit({ type: "usage", input: 3, cacheRead: null }, 1);
   const usage = entries.find(entry => entry.type === "goal.usage") as Extract<Entry, { type: "goal.usage" }>;
-  assert.deepEqual(usage, { type: "goal.usage", version: 1, seq: 2, input: 3, output: 0, cacheRead: null, cacheWrite: 0, unknownMessages: 0 });
+  assert.deepEqual(usage, { type: "goal.usage", version: 1, seq: 2, input: 3, output: 0, cacheRead: null, cacheWrite: 0, unknownMessages: 0, seconds: 0 });
   const replayed = createGoalCommit({ readBranch: () => entries, append: () => {} }).current()!.goal;
   assert.deepEqual(replayed.usage, { input: 3, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 1 });
   assert.deepEqual(replayed.usage, c.current()!.goal.usage);

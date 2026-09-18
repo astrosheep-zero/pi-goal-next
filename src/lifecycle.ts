@@ -3,12 +3,14 @@ import type { Message } from "./accounting.ts";
 import type { GoalSnapshot, CommitResult } from "./goal-commit.ts";
 import type { Intent } from "./goal.ts";
 import { createAccounting } from "./accounting.ts";
+import type { createGoalClock } from "./clock.ts";
 import type { Continuation } from "./continuation.ts";
 import type { MessageEndEvent, MessageStartEvent, InputEvent, AgentSettledEvent, SessionStartEvent } from "@earendil-works/pi-coding-agent";
 
 export type LifecycleDeps = {
-  goalCommit: { current(): GoalSnapshot | null; commit(intent: Intent, expectedRevision: number): Promise<CommitResult> };
+  goalCommit: { current(): GoalSnapshot | null; commit(intent: Intent, expectedRevision: number): Promise<CommitResult>; subscribe?(fn: (snapshot: GoalSnapshot | null) => void): void };
   accounting: ReturnType<typeof createAccounting>;
+  clock: ReturnType<typeof createGoalClock>;
   continuation: Continuation;
   send(message: { customType: string; content: string; display: false; details?: unknown }, options: { triggerTurn: true }): void;
   rebuild(): void;
@@ -28,6 +30,11 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
   }
   let pendingRebuild = false;
   const bootstrap = () => deps.rebuild();
+  // The wall clock follows every committed goal change immediately, including
+  // command/tool transitions that fire no lifecycle events (pause/resume gaps
+  // must never accrue). Event handlers below sync it for the rest.
+  deps.goalCommit.subscribe?.(snapshot => deps.clock.sync(snapshot?.goal ?? null));
+  const syncClock = () => deps.clock.sync(deps.goalCommit.current()?.goal ?? null);
   // Budget-limit steering is sent once per goal instance; reset on null branch or a new goal id.
   let steeredGoalId: string | null = null;
   let steered = false;
@@ -45,12 +52,27 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
   async function flushUsage(): Promise<boolean> {
     if (usageFlush) return usageFlush;
     usageFlush = (async () => {
+      let timeAccounted = false;
       for (const [id, item] of pendingUsage) {
         if (deps.goalCommit.current()?.goal.id !== item.goalId) { pendingUsage.delete(id); continue; }
         const delta = deps.accounting.previewMessage(item.message);
-        if (!await commitWithRetry({ type: "usage", ...delta }, 3, item.goalId)) return false;
+        // Attach the accrued active-wall-clock delta to the first commit of
+        // this flush; advance the baseline only after it is durably journaled.
+        const seconds = timeAccounted ? 0 : deps.clock.peek(item.goalId);
+        if (!await commitWithRetry({ type: "usage", ...delta, ...(seconds > 0 ? { seconds } : {}) }, 3, item.goalId)) return false;
+        if (seconds > 0) { deps.clock.markAccounted(item.goalId); timeAccounted = true; }
         deps.accounting.recordMessage(item.message);
         pendingUsage.delete(id);
+      }
+      if (!timeAccounted) {
+        // Journal idle active time even when no message usage is pending
+        // (e.g. the user speaks after the goal sat active between runs).
+        const goal = deps.goalCommit.current()?.goal;
+        const seconds = goal && goal.status === "active" ? deps.clock.peek(goal.id) : 0;
+        if (goal && seconds > 0) {
+          if (!await commitWithRetry({ type: "usage", seconds }, 3, goal.id)) return false;
+          deps.clock.markAccounted(goal.id);
+        }
       }
       return true;
     })();
@@ -74,6 +96,7 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     lastAssistantStop = undefined;
     // Retain the signal: ctx.signal becomes undefined once the run is idle.
     runSignal = ctx.signal;
+    syncClock();
     startGoalId = deps.goalCommit.current()?.goal.id ?? null;
     accountingGoalId = eligibleGoalId();
   });
@@ -85,6 +108,7 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     startGoalId = null;
     pendingUsage.clear();
     await bootstrap();
+    syncClock();
     const snapshot = deps.goalCommit.current();
     if (snapshot?.goal?.status === "active") {
       await commitWithRetry({ type: "transition", to: "paused", by: "system", userRequest: "session restored; explicit resume required" });
@@ -105,6 +129,7 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
   const before = async (_ctx: any) => { if (pendingRebuild) { pendingRebuild = false; await bootstrap(); } };
   pi.on("message_end", async (event: MessageEndEvent, ctx: any) => {
     await before(ctx);
+    syncClock();
     const m = event.message;
     if (m.role !== "assistant" && m.role !== "toolResult") return;
     if (m.role === "assistant") lastAssistantStop = m.stopReason;
@@ -120,6 +145,7 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
   });
   pi.on("agent_settled", async (_event: AgentSettledEvent, ctx: any) => {
     await before(ctx);
+    syncClock();
     if (!await flushUsage()) return; // No automatic work while usage persistence is unresolved.
     accountingGoalId = null;
     const snapshot = deps.goalCommit.current();
@@ -153,8 +179,10 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     if (event.message.role === "user") {
       inputPending = false;
       invalidate();
+      syncClock();
       startGoalId = deps.goalCommit.current()?.goal.id ?? null;
       accountingGoalId = eligibleGoalId();
+      await flushUsage(); // Journal active idle time accrued between runs.
     }
     await before(ctx);
     await deps.continuation.onMessageStart(event.message);
