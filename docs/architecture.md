@@ -85,9 +85,9 @@ Retry messages are separately accounted because each response costs real tokens.
 
 - `continuationPrompt(goal)` (`continuation.md`): the objective inside `<objective>` as user-provided data; budget block; "Work from evidence"; "Fidelity"; completion audit; blocked audit (three consecutive goal turns); closing rules.
 - `budgetLimitPrompt(goal)` (`budget_limit.md`): sent once per goal instance when the status flips to `budget_limited`.
-- `objectiveUpdatedPrompt(goal)` (`objective_updated.md`): sent after a successful in-place objective update (`/goal <new>` or `/goal edit` on an unfinished goal); uses `<untrusted_objective>` and reports remaining tokens as `unknown` when no budget is set.
+- `objectiveUpdatedPrompt(goal)` (`objective_updated.md`): sent after a successful in-place objective update (`/goal <new>` or `/goal edit` on an unfinished goal); uses `<untrusted_objective>` and reports remaining tokens as `unbounded` when no budget is set.
 
-Substitution is trivial `{{ name }}` replacement. `escapeXmlText` (`&`→`&amp;`, `<`→`&lt;`, `>`→`&gt;`) is applied to the objective only. `tokens_used` is `input+output+cacheRead+cacheWrite`; `token_budget` is the budget or `none`; `remaining_tokens` is `max(0, budget-used)`, or `unbounded` (continuation) / `unknown` (objective update) without a budget; `time_used_seconds` is `floor((Date.now()-createdAt)/1000)`.
+Substitution is trivial `{{ name }}` replacement. `escapeXmlText` (`&`→`&amp;`, `<`→`&lt;`, `>`→`&gt;`) is applied to the objective only. `tokens_used` is `input+output+cacheRead+cacheWrite`; `token_budget` is the budget or `none`; `remaining_tokens` is `max(0, budget-used)`, or `unbounded` without a budget; `time_used_seconds` is `floor((Date.now()-createdAt)/1000)`.
 
 The blocked audit is prompt-level only: the runtime does not count blocking turns and never rejects a `blocked` declaration.
 
