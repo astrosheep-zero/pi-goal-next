@@ -7,7 +7,7 @@ import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager
 import { createAssistantMessageEventStream, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import goalExtension from "../src/index.ts";
 
-// Exercise the real Pi 0.85 event dispatcher, session persistence, input queue,
+// Exercise the real Pi 1.1 event dispatcher, session persistence, input queue,
 // and sendMessage implementation. Only model inference is replaced; no network.
 async function harness(t: any, reasons: string[], toolComplete = false) {
   const dir = await mkdtemp(join(tmpdir(), "pi-goal-timing-"));

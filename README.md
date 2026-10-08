@@ -1,6 +1,6 @@
 # pi-goal
 
-`pi-goal` (published by this manifest as `pi-goal-next`) is a Pi 0.85.1 extension that adds a long-running `/goal`. It follows the Codex Goal semantics: the same model that performs the work audits its own progress and declares `complete`, `blocked`, or — at the user's explicit request — `paused` with `update_goal`. There is no independent auditor or human approval step.
+`pi-goal` (published by this manifest as `pi-goal-next`) is a Pi 1.1.0+ extension that adds a long-running `/goal`. It follows the Codex Goal semantics: the same model that performs the work audits its own progress and declares `complete`, `blocked`, or — at the user's explicit request — `paused` with `update_goal`. There is no independent auditor or human approval step.
 
 ## Installation
 
@@ -10,7 +10,7 @@ Install a local checkout:
 pi install /path/to/pi-goal
 ```
 
-For a project-local extension, add the package path to the project's Pi extension configuration (the package manifest exposes `./src/index.ts`), or run Pi with the checkout available to that project. The package requires Pi 0.85.1 APIs and its declared peer packages.
+For a project-local extension, add the package path to the project's Pi extension configuration (the package manifest exposes `./src/index.ts`), or run Pi with the checkout available to that project. The package requires Pi 1.1.0 or newer, including `agent_settled.aborted`, and its declared peer packages. Older Pi versions are not supported.
 
 ## Commands
 
@@ -46,10 +46,10 @@ The prompt text is copied byte-for-byte from Codex Goal (`continuation.md`, `bud
                     +---------------------------+
                     |                           v
                   paused <-------------------- active --------------------> complete
-                    ^                 /goal pause       update_goal complete
-                    |                         |
- session_start      |                         v
- restored active ---+                       blocked
+                                      /goal pause       update_goal complete
+                                              |
+                                              v
+                                           blocked
                                              ^
                          update_goal blocked|
 
@@ -72,6 +72,6 @@ The prompt text is copied byte-for-byte from Codex Goal (`continuation.md`, `bud
 
 The model calls `update_goal` after auditing the current goal against the Codex completion audit carried in every continuation prompt. The host accepts `complete` and `blocked` at face value and performs no independent verification; the prompt is the only guard. `paused` via the tool requires the user's explicit request and is otherwise indistinguishable from a user `/goal pause`. `complete` may transition an `active` or `budget_limited` goal and reports final token usage; it is prohibited from `paused` and `blocked`. `blocked` is meant to follow three consecutive turns with the same blocker. Runtime accounting may instead move an active goal to `budget_limited`; the model cannot declare that state, and the transition triggers one `budget_limit.md` steering message.
 
-Automatic continuation waits for a fresh normal assistant completion and for the entire Pi run to settle, including tools, retries, compaction, and queued input. Errors, cancellation (including cancellation after text finishes), and runs ending at a tool boundary do not trigger continuation or budget steering. Ordinary user input has no continuation attached; once the response to that input finishes normally, an active goal may continue.
+Automatic continuation waits for a fresh normal assistant completion and for the entire Pi run to settle, including tools, retries, compaction, and queued input. Errors, cancellation (`agent_settled.aborted`, including cancellation after text finishes), and runs ending at a tool boundary do not trigger continuation or budget steering. Cancelled runs still record consumed tokens and active time; cancellation itself does not pause the goal. Ordinary user input has no continuation attached; once the response to that input finishes normally, an active goal may continue.
 
 Continuation messages are sent only after a successful journal commit. The plugin checks cancellation, goal state, and pending input again after that commit, immediately before sending. A continuation carries the goal id, generation, and sequence number. Input received during scheduling invalidates the automatic send. Explicit `/goal` create/resume can start work immediately when idle.

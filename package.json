@@ -1,6 +1,6 @@
 {
   "name": "@astrosheep/pi-goal-next",
-  "version": "0.1.12",
+  "version": "0.2.0",
   "description": "Persistent autonomous goals for pi, with Codex-verbatim goal semantics: continuation prompts, self-audited completion, budgets, and CAS-journaled state.",
   "type": "module",
   "files": [
@@ -31,6 +31,9 @@
     "check": "pi --no-extensions -e ./src/index.ts --list-models __load_check__"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-tui": "1.1.0",
     "@types/node": "^26.5.1"
   }
 }

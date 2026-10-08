@@ -29,7 +29,7 @@ export function createFakePi(initial: any[] = []) {
     isIdle: () => idle,
     hasPendingMessages: () => pending
   };
-  async function emit(name: string, event: any = {}) { let result; for (const handler of handlers.get(name) ?? []) result = await handler({ type: name, ...event }, ctx); return result; }
+  async function emit(name: string, event: any = {}) { let result; for (const handler of handlers.get(name) ?? []) result = await handler({ type: name, ...(name === "agent_settled" ? { aborted: false } : {}), ...event }, ctx); return result; }
   return { pi, ctx, state, handlers, registrations, journal, sentMessages, emit, setIdle: (v: boolean) => { idle = v; }, setPendingMessages: (v: boolean) => { pending = v; }, createBranchedState: (entries: any[] = state.branch) => { state.branch = [...entries]; return state; } };
 }
 

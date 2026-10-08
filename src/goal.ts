@@ -112,7 +112,7 @@ export function fold(entries: readonly Entry[]): Goal | null {
   let state: Goal | null = null;
   for (const entry of entries) {
     if (!entry.type.startsWith("goal.")) continue;
-    if (entry.type === "goal.created" || entry.type === "goal.replaced") state = { timeUsedSeconds: 0, ...entry.goal };
+    if (entry.type === "goal.created" || entry.type === "goal.replaced") state = { ...entry.goal, timeUsedSeconds: entry.goal.timeUsedSeconds ?? 0 };
     else if (entry.type === "goal.cleared") state = null;
     else if (state && entry.type === "goal.objective_updated") state = transition(state, { type: "update_objective", objective: entry.objective });
     else if (state && entry.type === "goal.transition") state = transition(state, { type: "transition", to: entry.to, by: entry.by, userRequest: entry.userRequest, resetContinuations: entry.resetContinuations });

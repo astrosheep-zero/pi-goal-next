@@ -227,14 +227,14 @@ test("usage commit retries a conflict", async () => {
   assert.equal(h.goalCommit.current()?.goal.usage.output, 4);
 });
 
-test("session_start pauses a restored active goal", async () => {
+test("session_start keeps a restored active goal active (Codex auto-reactivation)", async () => {
   const h = setup();
   const seed = createGoalCommit({ readBranch: () => [], append: () => undefined });
   await seed.commit({ type: "create", id: "restored", objective: "resume me" }, 0);
   const entry = (seed as any).current().goal;
   h.fake.state.branch.push({ type: "custom", customType: "pi-goal-next", data: { type: "goal.created", version: 1, seq: 1, goal: entry } });
   await h.fake.emit("session_start");
-  assert.equal(h.goalCommit.current()?.goal.status, "paused");
+  assert.equal(h.goalCommit.current()?.goal.status, "active");
 });
 
 test("tree invalidates and rebuilds against the selected branch", async () => {
@@ -279,6 +279,67 @@ test("aborted turn skips continuation", async () => {
   h.fake.state.branch.push({ id: "m1", role: "assistant", usage: { input: 1 }, stopReason: "aborted" });
   await h.fake.emit("message_end", { message: { id: "m1", role: "assistant", usage: { input: 1 }, stopReason: "aborted" } });
   await h.fake.emit("agent_settled");
+  assert.equal(h.fake.sentMessages.length, 0);
+});
+
+test("settled abort after normal output retries accounting but consumes continuation authorization", async () => {
+  let now = 0;
+  const h = setup([], () => now);
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+  await h.fake.emit("agent_start"); // No captured signal: the event must be sufficient.
+  const original = h.goalCommit.commit;
+  let fail = true;
+  h.goalCommit.commit = async (intent: any, revision: number) => intent.type === "usage" && fail ? { kind: "error", error: new Error("disk") } : original(intent, revision);
+  now = 3000;
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 7 } } });
+  fail = false;
+  await h.fake.emit("agent_settled", { aborted: true });
+  assert.equal(h.goalCommit.current().goal.usage.input, 7);
+  assert.equal(h.goalCommit.current().goal.timeUsedSeconds, 3);
+  assert.equal(h.goalCommit.current().goal.status, "active");
+  assert.equal(h.fake.sentMessages.length, 0);
+  await h.fake.emit("agent_settled"); // A duplicate cannot reuse the old completion.
+  assert.equal(h.fake.sentMessages.length, 0);
+  await h.fake.emit("agent_start");
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 2 } } });
+  await h.fake.emit("agent_settled");
+  assert.equal(h.fake.sentMessages.length, 1);
+});
+
+test("settled abort after normal output suppresses budget steering without losing usage", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work", tokenBudget: 5 }, 0);
+  await h.fake.emit("agent_start");
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 7 } } });
+  await h.fake.emit("agent_settled", { aborted: true });
+  assert.equal(h.goalCommit.current().goal.usage.input, 7);
+  assert.equal(h.goalCommit.current().goal.status, "budget_limited");
+  assert.equal(h.fake.sentMessages.length, 0);
+  await h.fake.emit("agent_settled");
+  assert.equal(h.fake.sentMessages.length, 0);
+  await h.fake.emit("agent_start");
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 1 } } });
+  await h.fake.emit("agent_settled");
+  assert.equal(h.fake.sentMessages.length, 1);
+  assert.equal(h.fake.sentMessages[0].message.customType, "pi-goal-next/budget_limit");
+});
+
+test("signal abort during continuation commit still prevents send", async () => {
+  const h = setup();
+  const controller = new AbortController();
+  h.fake.ctx.signal = controller.signal;
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work" }, 0);
+  await h.fake.emit("agent_start");
+  h.fake.ctx.signal = undefined; // Pi clears the current signal at idle.
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 1 } } });
+  const original = h.goalCommit.commit;
+  h.goalCommit.commit = async (intent: any, revision: number) => {
+    const result = await original(intent, revision);
+    if (intent.type === "continuation_sent") controller.abort();
+    return result;
+  };
+  await h.fake.emit("agent_settled", { aborted: false });
+  assert.equal(controller.signal.aborted, true);
   assert.equal(h.fake.sentMessages.length, 0);
 });
 

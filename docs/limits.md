@@ -1,6 +1,6 @@
-# Pi 0.85.1 limits
+# Pi 1.1.0 limits
 
-The extension uses the public Pi 0.85.1 event, session, message, and send APIs. The following limits are intentional. Each item states what cannot be guaranteed, what the extension does, and what a user may observe.
+The extension requires Pi 1.1.0 or newer and uses its public event, session, message, and send APIs, including `agent_settled.aborted`. Older Pi versions are not supported. The following limits are intentional. Each item states what cannot be guaranteed, what the extension does, and what a user may observe.
 
 ## Declared boundaries
 
@@ -58,9 +58,9 @@ The extension uses the public Pi 0.85.1 event, session, message, and send APIs. 
 
 **Cannot guarantee:** Restoring a session does not prove that an in-flight continuation was never sent before the process stopped.
 
-**What it does:** Invalidates outstanding scheduling, rebuilds from the selected branch, and converts any restored `active` goal to `paused` with a system transition. It does not silently resume.
+**What it does:** Invalidates outstanding scheduling and rebuilds from the selected branch. A restored `active` goal stays `active` (Codex auto-reactivation semantics); a user-paused goal stays paused.
 
-**User sees:** A restored active goal is paused and requires `/goal resume`. A previously sent message may still be present in the provider transcript, but the restored status prevents normal continuation scheduling.
+**User sees:** A restored active goal continues after the next normal turn settles, or immediately via `/goal resume`. A previously sent message may still be present in the provider transcript; generation checks mark it stale and prevent double-scheduling.
 
 ### Branch/tree navigation
 
@@ -90,6 +90,6 @@ The extension uses the public Pi 0.85.1 event, session, message, and send APIs. 
 
 **Cannot guarantee:** Event delivery and message queue timing are controlled by Pi.
 
-**What it does:** Requires a fresh normal completion and an uncancelled run. Input receipt invalidates pending scheduling before Pi queues the message; its delivery clears the input-preflight fence. Idle/queue state, cancellation, and lifecycle eligibility are checked both before and after the continuation CAS commit. Pi does not expose an atomic journal-commit-and-start-if-idle operation, so a cancelled attempt may consume a continuation sequence number without sending a prompt.
+**What it does:** Requires a fresh normal completion and `agent_settled.aborted === false`; the retained run signal guards cancellation during async commits. Aborted runs still journal consumed tokens and active time; cancellation alone does not pause the goal. Input receipt invalidates pending scheduling before Pi queues the message; its delivery clears the input-preflight fence. Idle/queue state, cancellation, and lifecycle eligibility are checked both before and after the continuation CAS commit. Pi does not expose an atomic journal-commit-and-start-if-idle operation, so a cancelled attempt may consume a continuation sequence number without sending a prompt.
 
 **User sees:** A continuation can be skipped after a race with user input; the goal remains available after a later normal completion or explicit resume. If another extension handles/rejects input without delivering a user message, automatic scheduling stays suppressed until a later user message is delivered; explicit resume remains available.

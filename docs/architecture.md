@@ -4,7 +4,7 @@ All implementers follow this document exactly. Deviations require a new design r
 
 ## Product
 
-Pi 0.85.1 extension package adding a long-running `/goal`. Behavior follows Codex Goal (`codex-rs/ext/goal`) as the baseline: the *same executing model* audits its own completion and calls `update_goal`. **No independent auditor, no human approval gate.** What differs is only what Pi's public API forces.
+Pi 1.1.0+ extension package adding a long-running `/goal`. Behavior follows Codex Goal (`codex-rs/ext/goal`) as the baseline: the *same executing model* audits its own completion and calls `update_goal`. **No independent auditor, no human approval gate.** What differs is only what Pi's public API forces.
 
 ## Status set (goal.ts)
 
@@ -52,7 +52,7 @@ Internally: check `revision === expectedRevision` and no pending → mark pendin
 
 ## Continuation protocol
 
-`message_end` captures the current event's stop reason. Only a fresh `stop` or `length` response authorizes automatic work at `agent_settled`, after Pi has drained tools, retries, compaction, and queued messages. Settlement consumes that authorization once. The run's captured abort signal must not be aborted, no new input may be awaiting delivery, and Pi must be idle with no queued messages.
+`message_end` captures the current event's stop reason. Only a fresh `stop` or `length` response authorizes automatic work at `agent_settled`, after Pi has drained tools, retries, compaction, and queued messages. Settlement consumes that authorization once. `agent_settled.aborted` must be false (Pi 1.1.0+; no older-version fallback). The run's captured abort signal also guards cancellation during async commits. No new input may be awaiting delivery, and Pi must be idle with no queued messages. Usage and active time are flushed even for aborted runs; cancellation alone does not pause the goal.
 
 Then read `current()` → `commit(continuation_sent {generation}, revision)` → recheck lifecycle authorization, generation, goal identity/status, idle state, and pending messages → `pi.sendMessage(continuation, { triggerTurn: true })`. On conflict or invalidation, abandon this attempt. An abandoned attempt may consume a sequence number because Pi cannot atomically commit the journal and admit a new turn. Explicit `/goal` create/resume can start idle work without a preceding assistant response.
 
@@ -62,13 +62,13 @@ User messages win: `input` invalidates outstanding continuation attempts before 
 
 ## lifecycle.ts — the lifecycle policies
 
-1. `session_start`: invalidate pending work, rebuild, and transition any restored `active` goal to `paused`. Never silently resume.
+1. `session_start`: invalidate pending work and rebuild. A restored `active` goal stays `active` (Codex auto-reactivation); it never fires a continuation on its own — the next normal settled turn re-arms scheduling.
 2. `session_before_tree`: invalidate pending work; the next event rebuilds from the selected branch.
 3. Pi generates its normal conversation summary without a goal override. Goal state remains in its separate journal; `get_goal` and continuation prompts restore the relevant goal context.
 4. `agent_start`: reset completion state and capture `ctx.signal`. Retain that signal after Pi clears its current signal at idle, so cancellation during message/agent-end handlers still suppresses continuation.
 5. `message_end`: account the current message and capture its stop reason. Pi dispatches this hook **before** appending the message to SessionManager; never substitute the last persisted same-role message.
 6. `input` / user `message_start`: invalidate old scheduling and track input receipt through delivery.
-7. `agent_settled`: require and consume a fresh normal, uncancelled completion. Apply accounting limits, recheck input/run eligibility, and send budget steering once per goal instance if eligible. Otherwise run `continuation.onSettled(canSend)` with the same eligibility checks across the commit await. Error, aborted, toolUse-only, and empty runs send nothing.
+7. `agent_settled`: flush usage, then require and consume a fresh normal completion with `event.aborted === false`. Apply accounting limits, recheck input/run eligibility, and send budget steering once per goal instance if eligible. Otherwise run `continuation.onSettled(canSend)` with the same eligibility checks across the commit await. Error, aborted, toolUse-only, and empty runs send nothing.
 
 Retry messages are separately accounted because each response costs real tokens. Only the final successful run can authorize continuation.
 
@@ -103,7 +103,7 @@ A successful `resume` atomically journals `resetContinuations: true` on the user
 
 max continuations (turns): 25 · token budget: unset (opt-in) · the blocked-loop guard is Codex's three-consecutive-turns rule in the continuation prompt and the `update_goal` description (verbatim); it is prompt-level only and not runtime-enforced.
 
-## Declared Pi 0.85.1 limits (docs/limits.md must restate)
+## Declared Pi 1.1.0 limits (docs/limits.md must restate)
 
 1. Stale already-sent continuation runs one more turn (no retraction, no selective abort).
 2. Subagent/nested tokens counted only when toolResult.usage present.
@@ -112,4 +112,4 @@ max continuations (turns): 25 · token budget: unset (opt-in) · the blocked-loo
 
 ## Testing
 
-node:test covers goal transitions, journal replay, CAS conflicts, limits, prompts, commands, and lifecycle races. `test/pi-session.test.ts` additionally runs real Pi 0.85.1 AgentSessions with in-memory settings/sessions and a deterministic model stream (no network). It verifies pre-append event ordering, usage accounting, normal→error/abort transitions, abort during streaming and at message/agent-end boundaries, steering delivery, and the absence of a continuation attached to user input. The pre-fix 0.1.4 code fails the real-session error/abort regressions.
+node:test covers goal transitions, journal replay, CAS conflicts, limits, prompts, commands, and lifecycle races. `test/pi-session.test.ts` additionally runs real Pi 1.1.0 AgentSessions with in-memory settings/sessions and a deterministic model stream (no network). It verifies pre-append event ordering, usage accounting, normal→error/abort transitions, abort during streaming and at message/agent-end boundaries, steering delivery, and the absence of a continuation attached to user input. The pre-fix 0.1.4 code fails the real-session error/abort regressions.

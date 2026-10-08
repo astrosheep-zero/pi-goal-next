@@ -7,7 +7,7 @@ import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager
 import { createAssistantMessageEventStream, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import goalExtension from "../src/index.ts";
 
-// Exercise the real Pi 0.85 event dispatcher, session persistence, input queue,
+// Exercise the real Pi 1.1 event dispatcher, session persistence, input queue,
 // and sendMessage implementation. Only model inference is replaced; no network.
 async function harness(t: any, reasons: string[], compaction: { enabled: boolean; reserveTokens?: number; keepRecentTokens?: number } = { enabled: false }) {
   const dir = await mkdtemp(join(tmpdir(), "pi-goal-timing-"));
@@ -63,12 +63,15 @@ for (const boundary of ["message_end", "agent_end"] as const) {
   test(`real Pi: abort at ${boundary} after normal output prevents restart`, { timeout: 5000 }, async (t) => {
     const h = await harness(t, ["stop"]);
     let stopping: Promise<void> | undefined;
+    let settledAborted: boolean | undefined;
     h.session.subscribe((event) => {
+      if (event.type === "agent_settled") settledAborted = event.aborted;
       if (event.type === boundary && !stopping && (event.type !== "message_end" || event.message.role === "assistant")) stopping = h.session.abort();
     });
     await h.session.prompt("/goal work");
     await h.settle();
     await stopping;
+    assert.equal(settledAborted, true);
     assert.equal(h.calls(), 1);
     assert.equal(h.continuations().length, 1);
     assert.ok(h.session.isIdle);
@@ -159,7 +162,7 @@ test("real Pi: manual compaction uses Pi's default summary with a paused goal", 
   const result = await h.session.compact();
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0][7], "manual");
+  assert.equal(calls[0][4], "manual");
   assert.match(result.summary, /migration rollback is verified/);
   assert.match(result.summary, /Goal is present and paused/);
   assert.ok(calls[0][0].messagesToSummarize.some((message: any) => JSON.stringify(message).includes("old schema readable")));

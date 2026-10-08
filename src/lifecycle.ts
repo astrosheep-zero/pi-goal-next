@@ -109,10 +109,6 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     pendingUsage.clear();
     await bootstrap();
     syncClock();
-    const snapshot = deps.goalCommit.current();
-    if (snapshot?.goal?.status === "active") {
-      await commitWithRetry({ type: "transition", to: "paused", by: "system", userRequest: "session restored; explicit resume required" });
-    }
   });
 
   pi.on("session_before_tree", async (_event: any, ctx: any) => {
@@ -139,11 +135,13 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     if (!accountingGoalId || deps.goalCommit.current()?.goal.id !== accountingGoalId) return;
     let entryId = messageIds.get(m);
     if (!entryId) { entryId = `live-message:${++messageSeq}`; messageIds.set(m, entryId); }
-    const message: Message = { ...m, entryId };
+    // Re-spread usage: pi-ai's Usage is an interface without an implicit index
+    // signature; a fresh object literal is assignable to accounting's Usage.
+    const message: Message = { ...m, entryId, usage: m.usage == null ? m.usage : { ...m.usage } };
     if (!deps.accounting.hasMessage(entryId)) pendingUsage.set(entryId, { goalId: accountingGoalId, message });
     await flushUsage();
   });
-  pi.on("agent_settled", async (_event: AgentSettledEvent, ctx: any) => {
+  pi.on("agent_settled", async (event: AgentSettledEvent, ctx: any) => {
     await before(ctx);
     syncClock();
     if (!await flushUsage()) return; // No automatic work while usage persistence is unresolved.
@@ -152,7 +150,9 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     if (!snapshot) { steeredGoalId = null; steered = false; return; }
     const settledEpoch = epoch;
     const settledSignal = runSignal;
-    const canSend = () => epoch === settledEpoch && !settledSignal?.aborted && !inputPending && ctx.isIdle() && !ctx.hasPendingMessages();
+    // The event owns the settled outcome; the retained signal also catches
+    // cancellation during the async commits below.
+    const canSend = () => !event.aborted && epoch === settledEpoch && !settledSignal?.aborted && !inputPending && ctx.isIdle() && !ctx.hasPendingMessages();
     // Only a fresh normal completion can authorize automatic work. Consume it
     // once: duplicate settled events and tool-boundary aborts cannot restart us.
     const stop = lastAssistantStop;
