@@ -119,7 +119,7 @@ for (const reason of ["error", "aborted"]) {
     assert.equal(h.calls(), 2);
     assert.equal(h.continuations().length, 2); // explicit create + one normal completion
     assert.deepEqual(h.notifications.filter(message => message.startsWith("Goal continuing")), [
-      "Goal continuing (turn 1/25).", "Goal continuing (turn 2/25)."
+      "Goal continuing (turn 1/32).", "Goal continuing (turn 2/32)."
     ]);
     assert.deepEqual(h.beforePersist, [true, true]);
     const usage = h.session.sessionManager.getBranch().filter((e: any) => e.type === "custom" && e.data.type === "goal.usage").map((e: any) => e.data);

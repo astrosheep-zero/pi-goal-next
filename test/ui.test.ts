@@ -26,9 +26,9 @@ test("each delivered continuation notifies in English with its turn count", asyn
     assert.equal(h.notifications.length, turn - 1); // Sending alone is not delivery.
     const message = h.sentMessages[turn - 1].message;
     await h.emit("message_start", { message: { role: "custom", ...message } });
-    assert.deepEqual(h.notifications[turn - 1], { message: `Goal continuing (turn ${turn}/25).`, level: "info" });
+    assert.deepEqual(h.notifications[turn - 1], { message: `Goal continuing (turn ${turn}/32).`, level: "info" });
   }
-  assert.match(h.ctx.ui.statuses.get("pi-goal-next"), /continuations 2\/25/);
+  assert.match(h.ctx.ui.statuses.get("pi-goal-next"), /continuations 2\/32/);
 });
 
 test("aborted or fenced continuation attempts and unrelated messages do not notify", async () => {
@@ -45,7 +45,7 @@ test("aborted or fenced continuation attempts and unrelated messages do not noti
   };
   await settleNormally(h);
   assert.equal(h.sentMessages.length, 0); // Commit succeeded; post-commit fence blocked delivery.
-  assert.match(h.ctx.ui.statuses.get("pi-goal-next"), /continuations 1\/25/);
+  assert.match(h.ctx.ui.statuses.get("pi-goal-next"), /continuations 1\/32/);
   await h.emit("message_start", { message: { role: "user", content: "hi" } });
   await h.emit("message_start", { message: { role: "custom", customType: "pi-goal-next/objective_updated", details: {} } });
   assert.equal(h.notifications.length, 0);

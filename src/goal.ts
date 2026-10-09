@@ -1,3 +1,5 @@
+export const DEFAULT_MAX_CONTINUATIONS = 32;
+
 export type Status = "active" | "paused" | "blocked" | "budget_limited" | "complete";
 export type Actor = "user" | "agent" | "system";
 export type Goal = {
@@ -52,7 +54,7 @@ export function transition(state: Goal | null, intent: Intent): Goal | null {
   if (intent.type === "create") {
     if (state && unfinished(state.status)) throw new GoalError("unfinished", "an unfinished goal already exists");
     if (typeof intent.objective !== "string" || !intent.objective.trim() || !intent.id) throw new GoalError("invalid", "objective and id are required");
-    const max = intent.maxContinuations ?? 25;
+    const max = intent.maxContinuations ?? DEFAULT_MAX_CONTINUATIONS;
     if (!Number.isInteger(max) || max < 0 || (intent.tokenBudget !== undefined && intent.tokenBudget !== null && (!Number.isFinite(intent.tokenBudget) || intent.tokenBudget < 0))) throw new GoalError("invalid", "invalid limits");
     const now = Date.now();
     return { id: intent.id, objective: intent.objective.trim(), status: "active", tokenBudget: intent.tokenBudget ?? null, maxContinuations: max, continuationSeq: 0, createdAt: now, updatedAt: now, timeUsedSeconds: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unknownMessages: 0 } };

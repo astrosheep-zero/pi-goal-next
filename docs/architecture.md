@@ -101,7 +101,7 @@ A successful `resume` atomically journals `resetContinuations: true` on the user
 
 ## Defaults
 
-max continuations (turns): 25 · token budget: unset (opt-in) · the blocked-loop guard is Codex's three-consecutive-turns rule in the continuation prompt and the `update_goal` description (verbatim); it is prompt-level only and not runtime-enforced.
+max continuations (turns): 32 · token budget: unset (opt-in) · the blocked-loop guard is Codex's three-consecutive-turns rule in the continuation prompt and the `update_goal` description (verbatim); it is prompt-level only and not runtime-enforced.
 
 ## Declared Pi 1.1.0 limits (docs/limits.md must restate)
 

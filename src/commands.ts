@@ -1,4 +1,4 @@
-import { newGoalId } from "./goal.ts";
+import { DEFAULT_MAX_CONTINUATIONS, newGoalId } from "./goal.ts";
 import type { Intent, Status } from "./goal.ts";
 import { objectiveUpdatedPrompt } from "./prompts.ts";
 import type { GoalSnapshot } from "./goal-commit.ts";
@@ -64,7 +64,7 @@ export function registerGoalCommands(piLike: CommandPiLike, deps: CommandDeps): 
           if (r.kind === "ok") await deps.kick();
           return r.kind === "ok" ? "Goal resumed." : "Goal update failed.";
         }
-        case "budget": return finish(await goalCommit.commit({ type: "limit_config", tokenBudget: cmd.tokenBudget ?? null, maxContinuations: current?.goal.maxContinuations ?? 25 }, revision), "Goal limits updated.");
+        case "budget": return finish(await goalCommit.commit({ type: "limit_config", tokenBudget: cmd.tokenBudget ?? null, maxContinuations: current?.goal.maxContinuations ?? DEFAULT_MAX_CONTINUATIONS }, revision), "Goal limits updated.");
         case "turns": return finish(await goalCommit.commit({ type: "limit_config", tokenBudget: current?.goal.tokenBudget ?? null, maxContinuations: cmd.value as number }, revision), "Goal limits updated.");
         default: return "Invalid /goal command.";
       }
