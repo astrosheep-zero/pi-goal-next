@@ -36,5 +36,5 @@ export default function (pi: ExtensionAPI): void {
   registerGoalTools(pi, { goalCommit });
   registerGoalCommands(pi, { goalCommit, send, kick: () => continuation.onSettled() });
   registerLifecycle(pi, { goalCommit, accounting, clock, continuation, send, rebuild: () => goalCommit.rebuild() });
-  registerUi({ goalCommit, accounting, getContext: () => ctx });
+  registerUi(pi, { goalCommit, accounting, getContext: () => ctx });
 }

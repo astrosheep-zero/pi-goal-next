@@ -14,7 +14,7 @@ For a project-local extension, add the package path to the project's Pi extensio
 
 ## Commands
 
-`/goal` and `/goal status` show the current goal, status, continuation count, token budget, and recorded usage.
+`/goal` and `/goal status` show the current goal, status, continuation count, token budget, and recorded usage. All extension-provided messages and prompts are in English; user-provided objectives are preserved as written.
 
 ```text
 /goal Implement the migration and verify it with tests
@@ -74,4 +74,4 @@ The model calls `update_goal` after auditing the current goal against the Codex 
 
 Automatic continuation waits for a fresh normal assistant completion and for the entire Pi run to settle, including tools, retries, compaction, and queued input. Errors, cancellation (`agent_settled.aborted`, including cancellation after text finishes), and runs ending at a tool boundary do not trigger continuation or budget steering. Cancelled runs still record consumed tokens and active time; cancellation itself does not pause the goal. Ordinary user input has no continuation attached; once the response to that input finishes normally, an active goal may continue.
 
-Continuation messages are sent only after a successful journal commit. The plugin checks cancellation, goal state, and pending input again after that commit, immediately before sending. A continuation carries the goal id, generation, and sequence number. Input received during scheduling invalidates the automatic send. Explicit `/goal` create/resume can start work immediately when idle.
+Continuation messages are sent only after a successful journal commit. The plugin checks cancellation, goal state, and pending input again after that commit, immediately before sending. A continuation carries the goal id, generation, and sequence number. Input received during scheduling invalidates the automatic send. Explicit `/goal` create/resume can start work immediately when idle. Each delivered continuation displays an informational notification, `Goal continuing (turn N/25).`, using the configured continuation limit. Attempts cancelled or fenced before delivery do not notify.

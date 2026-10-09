@@ -17,10 +17,15 @@ async function harness(t: any, reasons: string[], compaction: { enabled: boolean
   assert.ok(model);
   await modelRuntime.setRuntimeApiKey(model.provider, "isolated-test-key");
   const beforePersist: boolean[] = [];
+  const notifications: string[] = [];
   const resourceLoader = new DefaultResourceLoader({
     cwd: dir, agentDir: dir, settingsManager, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
     agentsFilesOverride: () => ({ agentsFiles: [] }),
     extensionFactories: [goalExtension, (pi) => {
+      pi.on("session_start", (_event, ctx) => {
+        const notify = ctx.ui.notify;
+        ctx.ui.notify = (message, level) => { notifications.push(message); notify(message, level); };
+      });
       pi.on("message_end", (event, ctx) => {
         if (event.message.role === "assistant") beforePersist.push(!ctx.sessionManager.getBranch().some((e: any) => e.message === event.message));
       });
@@ -56,7 +61,7 @@ async function harness(t: any, reasons: string[], compaction: { enabled: boolean
   };
   t.after(async () => { session.dispose(); await rm(dir, { recursive: true, force: true }); assert.deepEqual(errors, []); });
   const continuations = () => session.sessionManager.getBranch().filter((e: any) => e.type === "custom_message" && e.customType === "pi-goal-next/continuation");
-  return { session, settle, continuations, beforePersist, calls: () => calls, beforeResponse: (handler: typeof beforeResponse) => { beforeResponse = handler; } };
+  return { session, settle, continuations, beforePersist, notifications, calls: () => calls, beforeResponse: (handler: typeof beforeResponse) => { beforeResponse = handler; } };
 }
 
 for (const boundary of ["message_end", "agent_end"] as const) {
@@ -113,6 +118,9 @@ for (const reason of ["error", "aborted"]) {
     await h.settle();
     assert.equal(h.calls(), 2);
     assert.equal(h.continuations().length, 2); // explicit create + one normal completion
+    assert.deepEqual(h.notifications.filter(message => message.startsWith("Goal continuing")), [
+      "Goal continuing (turn 1/25).", "Goal continuing (turn 2/25)."
+    ]);
     assert.deepEqual(h.beforePersist, [true, true]);
     const usage = h.session.sessionManager.getBranch().filter((e: any) => e.type === "custom" && e.data.type === "goal.usage").map((e: any) => e.data);
     assert.equal(usage.length, 2);
