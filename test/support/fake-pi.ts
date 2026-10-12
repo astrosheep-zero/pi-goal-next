@@ -16,7 +16,7 @@ export function createFakePi(initial: any[] = []) {
     isIdle: () => idle,
     hasPendingMessages: () => pending,
     sessionManager: { getBranch: () => state.branch, appendCustomEntry: (customType: string, data: any) => { const e = { type: "custom", customType, data }; state.branch.push(e); state.entries.push(e); } },
-    ui: { statuses: new Map<string, string>(), setStatus: (id: string, text: string) => ctx.ui.statuses.set(id, text), notify: () => undefined }
+    ui: { statuses: new Map<string, string>(), setStatus: (id: string, text: string | undefined) => { if (text === undefined) ctx.ui.statuses.delete(id); else ctx.ui.statuses.set(id, text); }, notify: () => undefined }
   };
   const pi: any = {
     ctx,

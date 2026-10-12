@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import extension from "../src/index.ts";
+import { transition, type Goal } from "../src/goal.ts";
+import type { GoalSnapshot } from "../src/goal-commit.ts";
+import { formatStatus } from "../src/ui.ts";
 import { createFakePi } from "./support/fake-pi.ts";
 
 async function setup() {
@@ -28,7 +31,7 @@ test("each delivered continuation notifies in English with its turn count", asyn
     await h.emit("message_start", { message: { role: "custom", ...message } });
     assert.deepEqual(h.notifications[turn - 1], { message: `Goal continuing (turn ${turn}/32).`, level: "info" });
   }
-  assert.match(h.ctx.ui.statuses.get("pi-goal-next"), /continuations 2\/32/);
+  assert.equal(h.ctx.ui.statuses.get("pi-goal-next"), "⚑\uFE0E"); // turn 2/32
 });
 
 test("aborted or fenced continuation attempts and unrelated messages do not notify", async () => {
@@ -45,8 +48,23 @@ test("aborted or fenced continuation attempts and unrelated messages do not noti
   };
   await settleNormally(h);
   assert.equal(h.sentMessages.length, 0); // Commit succeeded; post-commit fence blocked delivery.
-  assert.match(h.ctx.ui.statuses.get("pi-goal-next"), /continuations 1\/32/);
+  assert.equal(h.ctx.ui.statuses.get("pi-goal-next"), "⚑\uFE0E"); // turn 1/32
   await h.emit("message_start", { message: { role: "user", content: "hi" } });
   await h.emit("message_start", { message: { role: "custom", customType: "pi-goal-next/objective_updated", details: {} } });
   assert.equal(h.notifications.length, 0);
+});
+
+test("status text is a single state glyph", () => {
+  const snap = (over: Partial<Goal>): GoalSnapshot => ({ goal: { ...transition(null, { type: "create", id: "1", objective: "do it" })!, ...over }, revision: 0 });
+  assert.equal(formatStatus(snap({})), "⚑\uFE0E");
+  assert.equal(formatStatus(snap({ status: "paused" })), "⏸\uFE0E");
+  assert.equal(formatStatus(snap({ status: "blocked" })), "⊘");
+  assert.equal(formatStatus(snap({ status: "budget_limited" })), "⚠\uFE0E");
+});
+
+test("status line clears when the goal completes", async () => {
+  const h = await setup();
+  assert.ok(h.ctx.ui.statuses.has("pi-goal-next"));
+  await h.registrations.tools.find(t => t.name === "update_goal")!.execute("upd", { status: "complete" });
+  assert.equal(h.ctx.ui.statuses.has("pi-goal-next"), false);
 });

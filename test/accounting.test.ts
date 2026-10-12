@@ -32,15 +32,11 @@ test("stale flagging", () => {
   const a = createAccounting();
   a.recordMessage({ entryId: "x", role: "assistant", usage: { input: 1 }, toolName: "search" });
   a.recordStale("x");
-  assert.match(a.summary(goal()), /stale=1/);
+  assert.equal(a.recordMessage({ entryId: "x", role: "assistant", usage: { input: 1 } })!.delta.stale, true);
 });
 
 test("final completing turn can be accounted", () => {
   const a = createAccounting();
   const d = a.recordMessage({ entryId: "final", role: "assistant", usage: { input: 3, output: 4 } })!;
-  const g = goal();
-  g.usage.input += d.delta.input;
-  g.usage.output += d.delta.output;
-  g.status = "complete";
-  assert.match(a.summary(g), /input=3 output=4/);
+  assert.deepEqual(d.delta, { input: 3, output: 4, cacheRead: 0, cacheWrite: 0, unknownMessages: 0, stale: false });
 });

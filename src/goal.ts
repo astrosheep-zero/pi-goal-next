@@ -126,4 +126,3 @@ export function fold(entries: readonly Entry[]): Goal | null {
   return state;
 }
 export const newGoalId = (): string => `goal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-export function summarize(goal: Goal): string { const u = goal.usage; return `[goal ${goal.id}] ${goal.status}: ${goal.objective} (continuations ${goal.continuationSeq}/${goal.maxContinuations}, budget ${goal.tokenBudget ?? "none"}, time ${goal.timeUsedSeconds ?? 0}s, usage in=${u.input} out=${u.output} cacheRead=${u.cacheRead} cacheWrite=${u.cacheWrite} unknown=${u.unknownMessages})`; }

@@ -16,7 +16,6 @@ const n = (v: unknown): number | null => typeof v === "number" && Number.isFinit
 export function createAccounting() {
   const seen = new Set<string>();
   const stale = new Set<string>();
-  const unknown = new Set<string>();
   const deltas = new Map<string, Delta>();
 
   function previewMessage(message: Message): Omit<Delta, "stale"> {
@@ -38,7 +37,6 @@ export function createAccounting() {
       unknownMessages: missing ? 1 : 0,
       stale: stale.has(message.entryId)
     };
-    if (missing) unknown.add(message.entryId);
     deltas.set(message.entryId, delta);
     return { duplicate: false, delta };
   }
@@ -50,11 +48,5 @@ export function createAccounting() {
     if (goal.continuationSeq >= goal.maxContinuations) return { kind: "budget_limited", reason: `continuation limit reached (${goal.continuationSeq}/${goal.maxContinuations})` };
     return { kind: "ok" };
   }
-  function summary(goal: Goal) {
-    const u = goal.usage;
-    const staleText = stale.size ? `, stale=${stale.size}` : "";
-    const unknownText = u.unknownMessages || unknown.size ? `, unknown messages=${u.unknownMessages + unknown.size}` : "";
-    return `usage input=${u.input} output=${u.output} cacheRead=${u.cacheRead} cacheWrite=${u.cacheWrite}${unknownText}${staleText}`;
-  }
-  return { previewMessage, hasMessage: (id: string) => seen.has(id), recordMessage, recordStale, settleTurn, summary };
+  return { previewMessage, hasMessage: (id: string) => seen.has(id), recordMessage, recordStale, settleTurn };
 }

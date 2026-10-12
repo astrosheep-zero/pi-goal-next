@@ -1,13 +1,25 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { summarize } from "./goal.ts";
-import type { Goal } from "./goal.ts";
 import type { GoalSnapshot } from "./goal-commit.ts";
+import type { Status } from "./goal.ts";
 
-export type UiDeps = { goalCommit: { current(): GoalSnapshot | null; subscribe(fn: (snapshot: GoalSnapshot | null) => void): () => void }; accounting: { summary(goal: Goal): string }; getContext(): { ui?: { setStatus?(id: string, text: string): void } } | undefined };
+export type UiDeps = { goalCommit: { current(): GoalSnapshot | null; subscribe(fn: (snapshot: GoalSnapshot | null) => void): () => void }; getContext(): { ui?: { setStatus?(id: string, text: string | undefined): void } } | undefined };
+
+// U+FE0E (VS15) forces text presentation: macOS font fallback otherwise
+// renders these text-default codepoints as color emoji. ⊘ has no emoji
+// variant and needs no selector.
+const FLAG = "⚑\uFE0E";
+const STATE_GLYPHS: Partial<Record<Status, string>> = { paused: "⏸\uFE0E", blocked: "⊘", budget_limited: "⚠\uFE0E" };
+
+export function formatStatus(snapshot: GoalSnapshot): string {
+  return STATE_GLYPHS[snapshot.goal.status] ?? FLAG;
+}
 
 export function registerUi(pi: Pick<ExtensionAPI, "on">, deps: UiDeps): () => void {
   const render = (snapshot: GoalSnapshot | null) => {
-    const text = snapshot ? `${snapshot.goal.status}: ${summarize(snapshot.goal)} | ${deps.accounting.summary(snapshot.goal)}` : "no goal";
+    // Status line is a pure presence flag: objective and turn count stay off
+    // the shared footer line (user's call; details via /goal status).
+    // undefined removes the entry entirely: no goal, or goal completed.
+    const text = snapshot && snapshot.goal.status !== "complete" ? formatStatus(snapshot) : undefined;
     deps.getContext()?.ui?.setStatus?.("pi-goal-next", text);
   };
   const unsubscribeStatus = deps.goalCommit.subscribe(render);
