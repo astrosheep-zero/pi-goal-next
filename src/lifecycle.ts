@@ -1,4 +1,5 @@
-import { budgetLimitPrompt } from "./prompts.ts";
+import { budgetLimitPrompt, continuationLimitPrompt } from "./prompts.ts";
+import { limitReason } from "./goal.ts";
 import type { Message } from "./accounting.ts";
 import type { GoalSnapshot, CommitResult } from "./goal-commit.ts";
 import type { Intent } from "./goal.ts";
@@ -169,9 +170,10 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     if (!latest) { steeredGoalId = null; steered = false; return; }
     const goal = latest.goal;
     if (goal.id !== steeredGoalId) { steeredGoalId = goal.id; steered = false; }
-    if (goal.status === "budget_limited" && !steered) {
+    const reason = limitReason(goal);
+    if (goal.status === "budget_limited" && !steered && reason !== null) {
       steered = true;
-      deps.send({ customType: "pi-goal-next/budget_limit", content: budgetLimitPrompt(goal), display: false, details: { goalId: goal.id } }, { triggerTurn: true });
+      deps.send({ customType: "pi-goal-next/budget_limit", content: reason === "continuation_limit" ? continuationLimitPrompt(goal) : budgetLimitPrompt(goal), display: false, details: { goalId: goal.id } }, { triggerTurn: true });
     }
     await deps.continuation.onSettled(canSend);
   });

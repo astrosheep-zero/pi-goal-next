@@ -1,4 +1,4 @@
-import type { Goal } from "./goal.ts";
+import { limitReason, tokensUsed, type Goal } from "./goal.ts";
 
 export type Usage = {
   input?: number | null;
@@ -43,9 +43,9 @@ export function createAccounting() {
 
   function recordStale(entryId: string) { stale.add(entryId); const d = deltas.get(entryId); if (d) d.stale = true; }
   function settleTurn(goal: Goal): Verdict {
-    const total = goal.usage.input + goal.usage.output + goal.usage.cacheRead + goal.usage.cacheWrite;
-    if (goal.tokenBudget !== null && total >= goal.tokenBudget) return { kind: "budget_limited", reason: `token budget reached (${total}/${goal.tokenBudget})` };
-    if (goal.continuationSeq >= goal.maxContinuations) return { kind: "budget_limited", reason: `continuation limit reached (${goal.continuationSeq}/${goal.maxContinuations})` };
+    const reason = limitReason(goal);
+    if (reason === "token_budget") return { kind: "budget_limited", reason: `token budget reached (${tokensUsed(goal)}/${goal.tokenBudget})` };
+    if (reason === "continuation_limit") return { kind: "budget_limited", reason: `continuation limit reached (${goal.continuationSeq}/${goal.maxContinuations})` };
     return { kind: "ok" };
   }
   return { previewMessage, hasMessage: (id: string) => seen.has(id), recordMessage, recordStale, settleTurn };

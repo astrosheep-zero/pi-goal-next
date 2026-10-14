@@ -70,13 +70,33 @@ test("real Pi: bare /goal reports exhausted budget through UI without starting i
   const message = h.notifications.at(-1)!;
   assert.match(message, /Status: budget_limited/);
   assert.match(message, /Objective: verify this task/);
-  assert.match(message, /Token budget: 10/);
-  assert.match(message, /Tokens used: 33/);
+  assert.match(message, /Tokens: 33 used \/ 10 total budget/);
+  assert.match(message, /Limit reached: token budget/);
   assert.match(message, /Tokens remaining: 0/);
   assert.match(message, /Continuations: 1\/32 used/);
-  assert.match(message, /Active time: \d+s/);
+  assert.match(message, /Recorded active time: \d+s/);
   assert.equal(h.calls(), calls);
   assert.deepEqual(h.session.sessionManager.getBranch(), branch);
+  await h.session.prompt("/goal budget nonsense");
+  assert.match(h.notifications.at(-1)!, /Invalid.*Usage/);
+  assert.equal(h.calls(), calls);
+  assert.deepEqual(h.session.sessionManager.getBranch(), branch);
+});
+
+test("real Pi: continuation exhaustion sends the correct closure and recovery details with tokens still available", async (t) => {
+  const h = await harness(t, ["stop", "stop"]);
+  h.beforeResponse(async (call) => { if (call === 1) await h.session.prompt("/goal turns 1"); });
+  await h.session.prompt("/goal --tokens 1000 verify this task");
+  await h.settle();
+  const closure = h.session.sessionManager.getBranch().find((e: any) => e.type === "custom_message" && e.customType === "pi-goal-next/budget_limit") as any;
+  assert.ok(closure);
+  assert.match(closure.content, /automatic continuation limit, not its token budget/);
+  assert.doesNotMatch(closure.content, /has reached its token budget/);
+  await h.session.prompt("/goal");
+  assert.match(h.notifications.at(-1)!, /Limit reached: automatic continuation allowance/);
+  assert.match(h.notifications.at(-1)!, /Next: \/goal resume/);
+  assert.match(h.notifications.at(-1)!, /Tokens remaining: 967/);
+  assert.equal(h.calls(), 2);
 });
 
 test("real Pi: budget crossing before completion tool permits completion; final reply counts and later unrelated input does not", async (t) => {

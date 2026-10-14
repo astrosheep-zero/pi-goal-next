@@ -388,6 +388,7 @@ test("usage-journal budget flip steers exactly once", async () => {
   await h.fake.emit("agent_settled");
   const steers = () => h.fake.sentMessages.filter((m: any) => m.message.customType === "pi-goal-next/budget_limit");
   assert.equal(steers().length, 1);
+  assert.match(steers()[0].message.content, /has reached its token budget/);
   assert.deepEqual(h.fake.sentMessages[0].options, { triggerTurn: true });
   await h.fake.emit("agent_settled");
   assert.equal(steers().length, 1);
@@ -401,8 +402,22 @@ test("verdict-commit budget flip steers exactly once", async () => {
   assert.equal(h.goalCommit.current()?.goal.status, "budget_limited");
   const steers = () => h.fake.sentMessages.filter((m: any) => m.message.customType === "pi-goal-next/budget_limit");
   assert.equal(steers().length, 1);
+  assert.match(steers()[0].message.content, /automatic continuation limit, not its token budget/);
+  assert.match(steers()[0].message.content, /Automatic continuations used: 0\/0/);
+  assert.doesNotMatch(steers()[0].message.content, /has reached its token budget/);
   await h.fake.emit("agent_settled");
   assert.equal(steers().length, 1);
+});
+
+test("adjusted limits awaiting resume do not send a false token-exhaustion closure", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "ship", tokenBudget: 5 }, 0);
+  await h.goalCommit.commit({ type: "usage", input: 5 }, h.goalCommit.current()!.revision);
+  await h.goalCommit.commit({ type: "limit_config", tokenBudget: 100, maxContinuations: 32 }, h.goalCommit.current()!.revision);
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 1 } } });
+  await h.fake.emit("agent_settled");
+  assert.equal(h.goalCommit.current()!.goal.status, "budget_limited");
+  assert.equal(h.fake.sentMessages.length, 0);
 });
 
 test("active run journals accrued wall-clock time on its first usage commit", async () => {

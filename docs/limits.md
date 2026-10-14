@@ -18,7 +18,7 @@ The extension requires Pi 1.1.0 or newer and uses its public event, session, mes
 
 **What it does:** Counts nested usage only when it is present in `toolResult.usage`. In usage journal intents, omitted usage fields serialize as zero; an explicit `null` preserves existing unknown semantics. An absent entire Pi usage object remains unknown. Top-level assistant and tool-result events are deduplicated by live message-object identity, since their session entry IDs do not yet exist during `message_end`. Journaled usage survives reload; historical events are not counted again.
 
-**User sees:** The status line can show `unknown messages=N`, and budget totals can be lower than provider-side totals when nested usage was not reported. If a usage journal write fails, automatic continuation is suppressed and the next message or settled event retries it. Pending, uncommitted usage is held in memory and cannot survive a reload or branch change.
+**User sees:** The `/goal` detail query flags unknown-usage messages, and budget totals can be lower than provider-side totals when nested usage was not reported. If a usage journal write fails, automatic continuation is suppressed and the next message or settled event retries it. Pending, uncommitted usage is held in memory and cannot survive a reload or branch change.
 
 ### Goal-owned run usage
 

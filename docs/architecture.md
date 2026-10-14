@@ -19,17 +19,17 @@ Pi 1.1.0+ extension package adding a long-running `/goal`. Behavior follows Code
 
 | Module | Owns | Must not do |
 |---|---|---|
-| `goal.ts` | Goal type, status transitions `transition()`, journal `fold()`, `summarize()`. Pure, zero deps. | IO, Pi types, prompts |
+| `goal.ts` | Goal type, status transitions `transition()`, journal `fold()`, shared `tokensUsed()` and `limitReason()`. Pure, zero deps. | IO, Pi types, prompts |
 | `goal-commit.ts` | Sole write path: `current()`, `commit(intent, expectedRevision)`, `subscribe(fn)`. CAS + single pending slot; owns `revision`. | scheduling, accounting math, UI, Pi ctx |
 | `store.ts` | `readBranch()` (from `ctx.sessionManager.getBranch()`, filter `goal.*`), `append(entry)`, `assertVersion`. IO only. | state decisions, caching current |
-| `accounting.ts` | usage attribution keyed by **message id** (assistant and toolResult separately), `settleTurn() → verdict: ok \| budget_limited`, `summary()` | triggering continuation, editing goal state directly (returns verdict; lifecycle commits it) |
+| `accounting.ts` | usage attribution keyed by **message id** (assistant and toolResult separately), `settleTurn() → verdict: ok \| budget_limited` | triggering continuation, editing goal state directly (returns verdict; lifecycle commits it) |
 | `clock.ts` | Active wall-clock baseline (`sync`/`peek`/`markAccounted`), Codex `GoalWallClockAccounting` equivalent. Pure, injectable `now`. | journaling, goal state |
 | `continuation.ts` | `generation` lease, `agent_settled` decision, commit-then-sendMessage, stale handling. The ONLY sender of continuation messages. | building UI, reading store, deciding acceptance |
-| `prompts.ts` | Pure: the three Codex-verbatim goal templates — `continuationPrompt(goal)`, `budgetLimitPrompt(goal)`, `objectiveUpdatedPrompt(goal)`; `escapeXmlText` applies to the objective only. | IO, model calls, host-side validation |
+| `prompts.ts` | Pure: the three Codex-verbatim goal templates — `continuationPrompt(goal)`, `budgetLimitPrompt(goal)`, `objectiveUpdatedPrompt(goal)` — plus Pi's `continuationLimitPrompt(goal)` for its separate continuation allowance; `escapeXmlText` applies to the objective only. | IO, model calls, host-side validation |
 | `tools.ts` | Codex-verbatim tool descriptions, TypeBox schema → `goalCommit.commit` → tool result. Three tools: get_goal / create_goal / update_goal. `update_goal` accepts complete\|blocked\|paused and reports final usage on complete. | writing rules text, touching store/continuation |
 | `commands.ts` | `/goal` subcommands → goal-commit. | direct store access |
 | `lifecycle.ts` | Event ordering, live-message identities, run cancellation signal, and input/settlement fences. Session/branch/compaction policies plus budget-limit steering, see below. | holding Goal state |
-| `ui.ts` | Status text from `current()` + `accounting.summary()`; English continuation notifications on `message_start`. Read-only. | writes |
+| `ui.ts` | Single state glyph from `current()`; English continuation notifications on `message_start`. Read-only. | writes |
 | `index.ts` | dependency assembly + registration only. | logic |
 
 Dependency direction: `index → {tools, commands, lifecycle, ui} → {goal-commit, accounting, continuation, prompts} → {goal, store}`. `goal.ts` and `prompts.ts` have zero dependencies.
@@ -86,7 +86,7 @@ Retry messages are separately accounted because each response costs real tokens.
 `prompts.ts` copies the three Codex Goal templates byte-for-byte — the only deletion is the `update_plan` "Progress visibility" paragraph, because Pi has no `update_plan` tool.
 
 - `continuationPrompt(goal)` (`continuation.md`): the objective inside `<objective>` as user-provided data; budget block; "Work from evidence"; "Fidelity"; completion audit; blocked audit (three consecutive goal turns); closing rules.
-- `budgetLimitPrompt(goal)` (`budget_limit.md`): sent once per goal instance when the status flips to `budget_limited`.
+- `budgetLimitPrompt(goal)` (`budget_limit.md`): sent once per goal instance for token exhaustion. When only the continuation allowance is exhausted, use Pi's local `continuationLimitPrompt(goal)` instead, reporting counts and explaining `/goal resume`. If limits were relaxed while status is still `budget_limited`, send no false exhaustion closure; explicit resume is still required.
 - `objectiveUpdatedPrompt(goal)` (`objective_updated.md`): sent after a successful in-place objective update (`/goal <new>` or `/goal edit` on an unfinished goal); uses `<untrusted_objective>` and reports remaining tokens as `unbounded` when no budget is set.
 
 Substitution is trivial `{{ name }}` replacement. `escapeXmlText` (`&`→`&amp;`, `<`→`&lt;`, `>`→`&gt;`) is applied to the objective only. `tokens_used` is `input+output+cacheRead+cacheWrite`; `token_budget` is the budget or `none`; `remaining_tokens` is `max(0, budget-used)`, or `unbounded` without a budget; `time_used_seconds` is the goal's journaled active wall-clock total (`timeUsedSeconds`).
@@ -95,7 +95,9 @@ The blocked audit is prompt-level only: the runtime does not count blocking turn
 
 ## Commands
 
-`/goal` (detailed read-only query) · `/goal [--tokens N[k|M]] <objective>` (create, or in-place objective update while unfinished — Codex `thread/goal/set` semantics) · `/goal edit <objective>` (same in-place update) · `/goal pause` · `/goal resume` · `/goal clear` · `/goal budget <tokens|none>` · `/goal turns <max-continuations>`.
+Bare `/goal` shows the objective, actual limit/recovery step, total/used/remaining tokens, a separate input/output/cache breakdown, continuation counts, and recorded active time in hours/minutes/seconds. Malformed recognized subcommands warn without mutating goal state or starting a run. Budget and turns receipts report the new total allowance, retained usage/counts, and unchanged status; resume reports the reset continuation counter with preserved tokens. Pause/clear explicitly do not interrupt already-running model/tool work. Commit conflicts warn with a retry instruction; persistence/transition errors report the cause as error notifications.
+
+`/goal` (detailed read-only query) · `/goal [--tokens N[k|M]] <objective>` (create, or in-place objective update while unfinished — Codex `thread/goal/set` semantics) · `/goal edit <objective>` (same in-place update) · `/goal pause` · `/goal resume` · `/goal clear` · `/goal budget <tokens[k|M]|none>` · `/goal turns <max-continuations>`.
 
 A successful `resume` atomically journals `resetContinuations: true` on the user transition to active, resetting the run's continuation count while preserving the objective, usage, budget, and historical entries. It also accepts an already-active goal. Exhausted token budgets and zero continuation allowances are reported without resuming. A successful `create` or `resume` calls `continuation.onSettled()` so an idle session starts pursuing immediately (Codex starts the turn directly). A successful in-place objective update atomically appends `goal.objective_updated`, preserving the goal id, status, limits, and cumulative usage, then sends `objectiveUpdatedPrompt(goal)` with `triggerTurn: true`; `pause` and `clear` send nothing (the active-status check stops continuation).
 

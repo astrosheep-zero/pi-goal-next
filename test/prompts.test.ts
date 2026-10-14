@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { budgetLimitPrompt, continuationPrompt, objectiveUpdatedPrompt } from "../src/prompts.ts";
+import { budgetLimitPrompt, continuationLimitPrompt, continuationPrompt, objectiveUpdatedPrompt } from "../src/prompts.ts";
 import type { Goal } from "../src/goal.ts";
 
 const now = Date.now();
@@ -36,6 +36,19 @@ test("objective_updated and budget_limit match their Codex variants", () => {
   assert.match(limited, /Time spent pursuing goal: 0 seconds/);
   assert.match(budgetLimitPrompt(goal({ timeUsedSeconds: 5 })), /Time spent pursuing goal: 5 seconds/);
   assert.match(limited, /Token budget: none/);
+});
+
+test("continuation-limit closure states the true limit, preserves the objective fence, and explains resume", () => {
+  const prompt = continuationLimitPrompt(goal({ continuationSeq: 25, tokenBudget: 100 }));
+  assert.match(prompt, /automatic continuation limit, not its token budget/);
+  assert.match(prompt, /Automatic continuations used: 25\/25/);
+  assert.match(prompt, /Token budget: 100/);
+  assert.match(prompt, /Tokens remaining: 90/);
+  assert.match(prompt, /<untrusted_objective>\ndo &lt;work&gt; &amp; &lt;more&gt;\n<\/untrusted_objective>/);
+  assert.match(prompt, /do not start new substantive work/);
+  assert.match(prompt, /\/goal resume.*resets the continuation counter, not cumulative token usage/s);
+  assert.match(prompt, /Do not call update_goal unless the goal is actually complete/);
+  assert.doesNotMatch(prompt, /has reached its token budget/);
 });
 
 test("keeps the injection guard and blocked audit, drops update_plan", () => {

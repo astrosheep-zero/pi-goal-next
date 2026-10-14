@@ -1,6 +1,6 @@
 import { Type } from "typebox";
-import { newGoalId } from "./goal.ts";
-import type { Goal, Intent, Status } from "./goal.ts";
+import { newGoalId, tokensUsed } from "./goal.ts";
+import type { Intent, Status } from "./goal.ts";
 import type { CommitResult, GoalCommitLike } from "./goal-commit.ts";
 
 export type GoalToolDeps = { goalCommit: GoalCommitLike };
@@ -8,7 +8,6 @@ export type PiTool = { name: string; label?: string; description: string; parame
 export type PiLike = { registerTool(tool: any): void };
 
 const text = (value: unknown) => typeof value === "string" ? value : JSON.stringify(value);
-const tokensUsed = (goal: Goal) => goal.usage.input + goal.usage.output + goal.usage.cacheRead + goal.usage.cacheWrite;
 function result(message: string): any { return { content: [{ type: "text", text: message }] }; }
 function commitMessage(r: CommitResult): string {
   if (r.kind === "conflict") return "Goal update conflict: goal changed; retry with the current goal.";

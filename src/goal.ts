@@ -106,10 +106,13 @@ export function transition(state: Goal | null, intent: Intent): Goal | null {
   }
   return { ...state };
 }
-export function limitsExceeded(goal: Goal): boolean {
-  const used = goal.usage.input + goal.usage.output + goal.usage.cacheRead + goal.usage.cacheWrite;
-  return (goal.tokenBudget !== null && used >= goal.tokenBudget) || goal.continuationSeq >= goal.maxContinuations;
+export const tokensUsed = (goal: Goal): number => goal.usage.input + goal.usage.output + goal.usage.cacheRead + goal.usage.cacheWrite;
+export function limitReason(goal: Goal): "token_budget" | "continuation_limit" | null {
+  if (goal.tokenBudget !== null && tokensUsed(goal) >= goal.tokenBudget) return "token_budget";
+  if (goal.continuationSeq >= goal.maxContinuations) return "continuation_limit";
+  return null;
 }
+export function limitsExceeded(goal: Goal): boolean { return limitReason(goal) !== null; }
 export function fold(entries: readonly Entry[]): Goal | null {
   let state: Goal | null = null;
   for (const entry of entries) {

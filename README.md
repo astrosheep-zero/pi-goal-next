@@ -14,7 +14,7 @@ For a project-local extension, add the package path to the project's Pi extensio
 
 ## Commands
 
-`/goal` shows the current goal's status, objective, token budget, total usage (including input, output, and cache breakdown), remaining tokens, used/remaining continuation allowance, and recorded active time. Unset token budgets are shown as `unlimited`; missing usage is flagged when token totals may be incomplete. All extension-provided messages and prompts are in English; user-provided objectives are preserved as written.
+`/goal` shows the current goal's status, objective, token budget, total usage (including input, output, and cache breakdown), remaining tokens, used/remaining continuation allowance, and recorded active time. Unset token budgets are shown as `unlimited`; missing usage is flagged when token totals may be incomplete. Limited goals show the specific limit and recovery command; token breakdowns are on separate lines and active time uses hours/minutes/seconds. All extension-provided messages and prompts are in English; user-provided objectives are preserved as written.
 
 ```text
 /goal Implement the migration and verify it with tests
@@ -29,7 +29,9 @@ For a project-local extension, add the package path to the project's Pi extensio
 /goal clear
 ```
 
-With no goal, or when the current goal is complete, `/goal <objective>` creates a fresh goal. With an unfinished goal it instead updates the objective in place (Codex `thread/goal/set` semantics): same goal id, status, token budget, and cumulative usage are preserved, and an `objective_updated` steering message is sent. `/goal edit <objective>` performs the same in-place update. The model-facing `create_goal` tool still refuses while an unfinished goal exists. `pause` and `resume` are user commands; `clear` removes the goal semantically from the journal. Token suffixes accepted by create are `k` and `M` (for example, `200k` and `2M`).
+With no goal, or when the current goal is complete, `/goal <objective>` creates a fresh goal. With an unfinished goal it instead updates the objective in place (Codex `thread/goal/set` semantics): same goal id, status, token budget, and cumulative usage are preserved, and an `objective_updated` steering message is sent. `/goal edit <objective>` performs the same in-place update. The model-facing `create_goal` tool still refuses while an unfinished goal exists. `pause` and `resume` are user commands; `clear` removes the goal semantically from the journal. Both `--tokens` and `budget` accept `k` and `M` suffixes (for example, `200k` and `2M`). A budget is a total allowance, not additional tokens. Recognized subcommands validate their arguments; malformed commands warn without creating/updating a goal or starting model work.
+
+`pause` and `clear` disable automatic goal continuation; neither interrupts already-running model/tool work. Use Pi's stop control to interrupt the current run. Resume receipts explicitly report the reset continuation allowance and preserved token usage; changing limits does not reset usage, counters, or goal status. Warnings and command failures use warning/error notifications rather than info.
 
 ## Model tools
 
@@ -37,7 +39,7 @@ With no goal, or when the current goal is complete, `/goal <objective>` creates 
 - `create_goal` creates an active goal after an explicit request. It accepts `objective` and optional `token_budget` (a positive integer).
 - `update_goal` accepts `complete`, `blocked`, or `paused` after the model's self-audit. `paused` is honored only at the user's explicit request (prompt-level rule; the host enforces only the state machine). `complete` is permitted from `active` and `budget_limited`, not `paused` or `blocked`; the host does not validate declarations. On `complete` the result reports the final token usage and active time used.
 
-The prompt text is copied byte-for-byte from Codex Goal (`continuation.md`, `budget_limit.md`, `objective_updated.md`); the only deletion is Codex's `update_plan` "Progress visibility" paragraph, because Pi has no `update_plan` tool. Continuation prompts state the objective inside `<objective>` as user-provided data and carry the budget, evidence, fidelity, completion-audit, and blocked-audit rules. The three-consecutive-turn blocked audit is prompt-level guidance; the runtime does not enforce it.
+The prompt text is copied byte-for-byte from Codex Goal (`continuation.md`, `budget_limit.md`, `objective_updated.md`); the only deletion is Codex's `update_plan` "Progress visibility" paragraph, because Pi has no `update_plan` tool. Continuation prompts state the objective inside `<objective>` as user-provided data and carry the budget, evidence, fidelity, completion-audit, and blocked-audit rules. The three-consecutive-turn blocked audit is prompt-level guidance; the runtime does not enforce it. Pi's separate continuation limit uses a local closure prompt that identifies the continuation allowance, not token exhaustion; the three Codex templates remain unchanged.
 
 ## State machine
 
@@ -70,7 +72,7 @@ The prompt text is copied byte-for-byte from Codex Goal (`continuation.md`, `bud
 
 ## Completion and blocking contract
 
-The model calls `update_goal` after auditing the current goal against the Codex completion audit carried in every continuation prompt. The host accepts `complete` and `blocked` at face value and performs no independent verification; the prompt is the only guard. `paused` via the tool requires the user's explicit request and is otherwise indistinguishable from a user `/goal pause`. `complete` may transition an `active` or `budget_limited` goal and reports final token usage; it is prohibited from `paused` and `blocked`. `blocked` is meant to follow three consecutive turns with the same blocker. Runtime accounting may instead move an active goal to `budget_limited`; the model cannot declare that state, and the transition triggers one `budget_limit.md` steering message.
+The model calls `update_goal` after auditing the current goal against the Codex completion audit carried in every continuation prompt. The host accepts `complete` and `blocked` at face value and performs no independent verification; the prompt is the only guard. `paused` via the tool requires the user's explicit request and is otherwise indistinguishable from a user `/goal pause`. `complete` may transition an `active` or `budget_limited` goal and reports final token usage; it is prohibited from `paused` and `blocked`. `blocked` is meant to follow three consecutive turns with the same blocker. Runtime accounting may instead move an active goal to `budget_limited`; the model cannot declare that state, and the runtime sends one closure message per goal instance: Codex's `budget_limit.md` for token exhaustion, or Pi's continuation-limit closure when tokens are still available. Limits relaxed without resume do not trigger a false exhaustion message.
 
 Automatic continuation waits for a fresh normal assistant completion and for the entire Pi run to settle, including tools, retries, compaction, and queued input. Errors, cancellation (`agent_settled.aborted`, including cancellation after text finishes), and runs ending at a tool boundary do not trigger continuation or budget steering. Cancelled runs still record consumed tokens and active time; cancellation itself does not pause the goal. Ordinary user input has no continuation attached; once the response to that input finishes normally, an active goal may continue.
 
