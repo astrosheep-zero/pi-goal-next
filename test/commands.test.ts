@@ -10,19 +10,50 @@ function setup(snapshot: GoalSnapshot | null = { goal, revision: 4 }) {
   const calls: any[] = []; const sent: any[] = []; let kicks = 0; let command: any;
   registerGoalCommands({ registerCommand: (_name, c) => { command = c; } }, {
     goalCommit: { current: () => snapshot, getRevision: () => snapshot?.revision ?? 0, commit: async (intent, revision) => { calls.push({ intent, revision }); return { kind: "ok", snapshot }; } },
-    summarize: s => s ? `SHOW ${s.goal.id}` : "EMPTY",
     send: (message, options) => sent.push({ message, options }),
     kick: async () => { kicks++; }
   });
   return { command, calls, sent, kicks: () => kicks };
 }
 
-test("parses status, token suffixes, and limits", () => {
-  assert.deepEqual(parseGoalCommand(""), { kind: "status" });
+test("parses bare query, token suffixes, and limits", () => {
+  assert.deepEqual(parseGoalCommand(""), { kind: "show" });
   assert.deepEqual(parseGoalCommand("--tokens 2K ship it"), { kind: "create", objective: "ship it", tokenBudget: 2000 });
   assert.deepEqual(parseGoalCommand("--tokens 3m ship it"), { kind: "create", objective: "ship it", tokenBudget: 3000000 });
   assert.deepEqual(parseGoalCommand("budget none"), { kind: "budget", tokenBudget: null });
   assert.deepEqual(parseGoalCommand("turns 12"), { kind: "turns", value: 12 });
+});
+
+test("bare /goal shows budget, usage, continuations, and active time through notify without mutations", async () => {
+  const snapshot: GoalSnapshot = { goal: { ...goal, objective: "32k input within 90 seconds", status: "budget_limited", tokenBudget: 1000, continuationSeq: 2, timeUsedSeconds: 90, usage: { input: 700, output: 200, cacheRead: 300, cacheWrite: 50, unknownMessages: 1 } }, revision: 4 };
+  const h = setup(snapshot);
+  const notifications: any[] = [];
+  const message = await h.command.handler("", { ui: { notify: (...args: any[]) => notifications.push(args) } });
+  assert.match(message, /Status: budget_limited/);
+  assert.match(message, /Objective: 32k input within 90 seconds/);
+  assert.match(message, /Token budget: 1,000/);
+  assert.match(message, /Tokens used: 1,250 \(input=700, output=200, cache read=300, cache write=50\)/);
+  assert.match(message, /Tokens remaining: 0/);
+  assert.match(message, /Continuations: 2\/25 used \(23 remaining\)/);
+  assert.match(message, /Active time: 90s/);
+  assert.match(message, /Unknown-usage messages: 1.*incomplete/);
+  assert.deepEqual(notifications, [[message, "info"]]);
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.sent.length, 0);
+  assert.equal(h.kicks(), 0);
+});
+
+test("bare /goal distinguishes unbounded tokens from exhausted continuations, and shows remaining bounded tokens", async () => {
+  const h = setup({ goal: { ...goal, status: "budget_limited", continuationSeq: 25 }, revision: 4 });
+  const message = await h.command.handler(" ");
+  assert.match(message, /Token budget: unlimited/);
+  assert.match(message, /Tokens remaining: unlimited/);
+  assert.match(message, /Continuations: 25\/25 used \(0 remaining\)/);
+  assert.doesNotMatch(message, /Unknown-usage/);
+  const bounded = setup({ goal: { ...goal, tokenBudget: 2000, usage: { ...goal.usage, input: 100 } }, revision: 4 });
+  assert.match(await bounded.command.handler(""), /Tokens remaining: 1,900/);
+  assert.equal(await setup(null).command.handler(""), "No active goal.");
+  assert.match(await setup({ goal: { ...goal, status: "complete" }, revision: 4 }).command.handler(""), /Status: complete/);
 });
 
 test("clear, pause, and resume commit user flows", async () => {

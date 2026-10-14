@@ -14,12 +14,12 @@ For a project-local extension, add the package path to the project's Pi extensio
 
 ## Commands
 
-`/goal` and `/goal status` show the current goal, status, continuation count, token budget, and recorded usage. All extension-provided messages and prompts are in English; user-provided objectives are preserved as written.
+`/goal` shows the current goal's status, objective, token budget, total usage (including input, output, and cache breakdown), remaining tokens, used/remaining continuation allowance, and recorded active time. Unset token budgets are shown as `unlimited`; missing usage is flagged when token totals may be incomplete. All extension-provided messages and prompts are in English; user-provided objectives are preserved as written.
 
 ```text
 /goal Implement the migration and verify it with tests
 /goal --tokens 200k Implement the migration
-/goal status
+/goal
 /goal edit Replace the migration objective with this one
 /goal pause
 /goal resume

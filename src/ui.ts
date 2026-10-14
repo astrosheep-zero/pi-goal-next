@@ -17,7 +17,7 @@ export function formatStatus(snapshot: GoalSnapshot): string {
 export function registerUi(pi: Pick<ExtensionAPI, "on">, deps: UiDeps): () => void {
   const render = (snapshot: GoalSnapshot | null) => {
     // Status line is a pure presence flag: objective and turn count stay off
-    // the shared footer line (user's call; details via /goal status).
+    // the shared footer line (user's call; details via /goal).
     // undefined removes the entry entirely: no goal, or goal completed.
     const text = snapshot && snapshot.goal.status !== "complete" ? formatStatus(snapshot) : undefined;
     deps.getContext()?.ui?.setStatus?.("pi-goal-next", text);

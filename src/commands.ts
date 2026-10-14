@@ -1,19 +1,17 @@
 import { DEFAULT_MAX_CONTINUATIONS, newGoalId } from "./goal.ts";
-import type { Intent, Status } from "./goal.ts";
 import { objectiveUpdatedPrompt } from "./prompts.ts";
 import type { GoalSnapshot } from "./goal-commit.ts";
 import type { GoalCommitLike } from "./goal-commit.ts";
 
 export type CommandDeps = {
   goalCommit: GoalCommitLike;
-  summarize?: (snapshot: GoalSnapshot | null) => string;
   send(message: { customType: string; content: string; display: false; details?: unknown }, options: { triggerTurn: true }): void;
   kick(): Promise<void>;
 };
 export type CommandPiLike = { registerCommand(name: string, command: any): void };
 
 export function parseGoalCommand(input: string): { kind: string; objective?: string; tokenBudget?: number | null; value?: number } {
-  const s = input.trim(); if (!s || s === "status") return { kind: "status" };
+  const s = input.trim(); if (!s) return { kind: "show" };
   if (s === "pause" || s === "resume" || s === "clear") return { kind: s };
   const budget = s.match(/^budget\s+(none|\d+)$/i); if (budget) return { kind: "budget", tokenBudget: budget[1].toLowerCase() === "none" ? null : Number(budget[1]) };
   const turns = s.match(/^turns\s+(\d+)$/i); if (turns) return { kind: "turns", value: Number(turns[1]) };
@@ -22,16 +20,33 @@ export function parseGoalCommand(input: string): { kind: string; objective?: str
   return { kind: "invalid" };
 }
 
+function formatGoal(snapshot: GoalSnapshot | null): string {
+  if (!snapshot) return "No active goal.";
+  const g = snapshot.goal;
+  const u = g.usage;
+  const used = u.input + u.output + u.cacheRead + u.cacheWrite;
+  const n = (value: number) => value.toLocaleString("en-US");
+  return [
+    `Status: ${g.status}`,
+    `Objective: ${g.objective}`,
+    `Token budget: ${g.tokenBudget === null ? "unlimited" : n(g.tokenBudget)}`,
+    `Tokens used: ${n(used)} (input=${n(u.input)}, output=${n(u.output)}, cache read=${n(u.cacheRead)}, cache write=${n(u.cacheWrite)})`,
+    `Tokens remaining: ${g.tokenBudget === null ? "unlimited" : n(Math.max(0, g.tokenBudget - used))}`,
+    `Continuations: ${g.continuationSeq}/${g.maxContinuations} used (${Math.max(0, g.maxContinuations - g.continuationSeq)} remaining)`,
+    `Active time: ${g.timeUsedSeconds ?? 0}s`,
+    ...(u.unknownMessages > 0 ? [`Unknown-usage messages: ${u.unknownMessages} (token totals may be incomplete)`] : [])
+  ].join("\n");
+}
+
 export function registerGoalCommands(piLike: CommandPiLike, deps: CommandDeps): void {
   const { goalCommit } = deps;
-  const summarize = deps.summarize ?? ((snapshot: GoalSnapshot | null) => snapshot ? `${snapshot.goal.status}: ${snapshot.goal.objective}` : "No active goal.");
   piLike.registerCommand("goal", { description: "Manage the current goal", handler: async (raw: string, ctx?: { ui?: { notify(message: string, level?: string): void } }) => {
     const run = async (cmd: ReturnType<typeof parseGoalCommand>): Promise<string> => {
       const current = goalCommit.current();
       const revision = current?.revision ?? goalCommit.getRevision();
       const finish = (r: Awaited<ReturnType<GoalCommitLike["commit"]>>, ok: string) => r.kind === "ok" ? ok : "Goal update failed.";
       switch (cmd.kind) {
-        case "status": return summarize(current);
+        case "show": return formatGoal(current);
         case "create": {
           // Codex thread/goal/set semantics: an unfinished goal's objective is
           // updated in place (same goal id, usage/budget preserved); a missing

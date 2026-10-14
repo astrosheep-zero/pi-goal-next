@@ -29,7 +29,8 @@ async function harness(t: any, reasons: string[], toolComplete = false) {
   await resourceLoader.reload();
   const { session } = await createAgentSession({ cwd: dir, agentDir: dir, resourceLoader, settingsManager, modelRuntime, model, tools: ["update_goal"], sessionManager: SessionManager.inMemory(dir) });
   const errors: unknown[] = [];
-  await session.bindExtensions({ onError: (e) => errors.push(e) });
+  const notifications: string[] = [];
+  await session.bindExtensions({ onError: (e) => errors.push(e), uiContext: { notify: (message: string) => notifications.push(message), setStatus: () => {} } as any });
   let calls = 0;
   let beforeResponse: ((call: number, signal?: AbortSignal) => Promise<void>) | undefined;
   session.agent.streamFunction = async (_model, _context, options) => {
@@ -56,8 +57,27 @@ async function harness(t: any, reasons: string[], toolComplete = false) {
   };
   t.after(async () => { session.dispose(); await rm(dir, { recursive: true, force: true }); assert.deepEqual(errors, []); });
   const continuations = () => session.sessionManager.getBranch().filter((e: any) => e.type === "custom_message" && e.customType === "pi-goal-next/continuation");
-  return { session, settle, continuations, beforePersist, calls: () => calls, beforeResponse: (handler: typeof beforeResponse) => { beforeResponse = handler; } };
+  return { session, settle, continuations, beforePersist, notifications, calls: () => calls, beforeResponse: (handler: typeof beforeResponse) => { beforeResponse = handler; } };
 }
+
+test("real Pi: bare /goal reports exhausted budget through UI without starting inference or changing the journal", async (t) => {
+  const h = await harness(t, ["stop", "stop"]);
+  await h.session.prompt("/goal --tokens 10 verify this task");
+  await h.settle();
+  const calls = h.calls();
+  const branch = h.session.sessionManager.getBranch();
+  await h.session.prompt("/goal");
+  const message = h.notifications.at(-1)!;
+  assert.match(message, /Status: budget_limited/);
+  assert.match(message, /Objective: verify this task/);
+  assert.match(message, /Token budget: 10/);
+  assert.match(message, /Tokens used: 33/);
+  assert.match(message, /Tokens remaining: 0/);
+  assert.match(message, /Continuations: 1\/32 used/);
+  assert.match(message, /Active time: \d+s/);
+  assert.equal(h.calls(), calls);
+  assert.deepEqual(h.session.sessionManager.getBranch(), branch);
+});
 
 test("real Pi: budget crossing before completion tool permits completion; final reply counts and later unrelated input does not", async (t) => {
   const h = await harness(t, ["toolUse", "stop", "stop"], true);

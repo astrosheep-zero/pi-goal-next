@@ -95,7 +95,7 @@ The blocked audit is prompt-level only: the runtime does not count blocking turn
 
 ## Commands
 
-`/goal` or `/goal status` · `/goal [--tokens N[k|M]] <objective>` (create, or in-place objective update while unfinished — Codex `thread/goal/set` semantics) · `/goal edit <objective>` (same in-place update) · `/goal pause` · `/goal resume` · `/goal clear` · `/goal budget <tokens|none>` · `/goal turns <max-continuations>`.
+`/goal` (detailed read-only query) · `/goal [--tokens N[k|M]] <objective>` (create, or in-place objective update while unfinished — Codex `thread/goal/set` semantics) · `/goal edit <objective>` (same in-place update) · `/goal pause` · `/goal resume` · `/goal clear` · `/goal budget <tokens|none>` · `/goal turns <max-continuations>`.
 
 A successful `resume` atomically journals `resetContinuations: true` on the user transition to active, resetting the run's continuation count while preserving the objective, usage, budget, and historical entries. It also accepts an already-active goal. Exhausted token budgets and zero continuation allowances are reported without resuming. A successful `create` or `resume` calls `continuation.onSettled()` so an idle session starts pursuing immediately (Codex starts the turn directly). A successful in-place objective update atomically appends `goal.objective_updated`, preserving the goal id, status, limits, and cumulative usage, then sends `objectiveUpdatedPrompt(goal)` with `triggerTurn: true`; `pause` and `clear` send nothing (the active-status check stops continuation).
 
