@@ -30,7 +30,7 @@ export default function (pi: ExtensionAPI): void {
     hasPendingMessages: () => ctx?.hasPendingMessages?.() ?? false,
     buildPrompt: continuationPrompt
   });
-  const send = (message: { customType: string; content: string; display: false; details?: unknown }, options: { triggerTurn: true }) => {
+  const send = (message: { customType: string; content: string; display: false; details?: unknown }, options: { triggerTurn: true; deliverAs?: "steer" }) => {
     void Promise.resolve(pi.sendMessage(message, options)).catch(() => undefined);
   };
   registerGoalTools(pi, { goalCommit });

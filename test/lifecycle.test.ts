@@ -320,8 +320,7 @@ test("settled abort after normal output suppresses budget steering without losin
   await h.fake.emit("agent_start");
   await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 1 } } });
   await h.fake.emit("agent_settled");
-  assert.equal(h.fake.sentMessages.length, 1);
-  assert.equal(h.fake.sentMessages[0].message.customType, "pi-goal-next/budget_limit");
+  assert.equal(h.fake.sentMessages.length, 0); // A later plain reply must not start a closure run either.
 });
 
 test("signal abort during continuation commit still prevents send", async () => {
@@ -379,19 +378,75 @@ for (const stopReason of ["aborted", "error"]) {
   });
 }
 
-test("usage-journal budget flip steers exactly once", async () => {
+test("token budget flip steers once at tool completion, accounts nested usage and never starts a closure run", async () => {
   const h = setup();
   await h.goalCommit.commit({ type: "create", id: "g", objective: "ship", tokenBudget: 5 }, 0);
-  h.fake.state.branch.push({ id: "m1", role: "assistant", usage: { input: 5 } });
-  await h.fake.emit("message_end", { message: { id: "m1", role: "assistant", usage: { input: 5 }, stopReason: "stop" } });
+  h.fake.setIdle(false);
+  await h.fake.emit("agent_start");
+  await h.fake.emit("message_end", { message: { role: "assistant", usage: { input: 3 }, stopReason: "toolUse" } });
+  assert.equal(h.fake.sentMessages.length, 0);
+  await h.fake.emit("message_end", { message: { role: "toolResult", toolName: "bash", usage: { input: 2 } } });
   assert.equal(h.goalCommit.current()?.goal.status, "budget_limited");
+  assert.equal(h.fake.sentMessages.length, 1);
+  assert.match(h.fake.sentMessages[0].message.content, /has reached its token budget/);
+  assert.match(h.fake.sentMessages[0].message.content, /Tokens used: 5/);
+  assert.deepEqual(h.fake.sentMessages[0].options, { triggerTurn: true, deliverAs: "steer" });
+  await h.fake.emit("message_end", { message: { role: "toolResult", toolName: "read", usage: { input: 1 } } });
+  await h.fake.emit("message_end", { message: { role: "assistant", usage: { input: 7 }, stopReason: "stop" } });
+  h.fake.setIdle(true);
   await h.fake.emit("agent_settled");
-  const steers = () => h.fake.sentMessages.filter((m: any) => m.message.customType === "pi-goal-next/budget_limit");
-  assert.equal(steers().length, 1);
-  assert.match(steers()[0].message.content, /has reached its token budget/);
-  assert.deepEqual(h.fake.sentMessages[0].options, { triggerTurn: true });
   await h.fake.emit("agent_settled");
-  assert.equal(steers().length, 1);
+  assert.equal(h.fake.sentMessages.length, 1);
+  assert.equal(h.goalCommit.current()?.goal.usage.input, 13);
+});
+
+test("input during a tool usage commit fences the current-run budget steer", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work", tokenBudget: 5 }, 0);
+  h.fake.setIdle(false);
+  await h.fake.emit("agent_start");
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "toolUse", usage: { input: 3 } } });
+  const original = h.goalCommit.commit;
+  h.goalCommit.commit = async (intent: any, revision: number) => {
+    const result = await original(intent, revision);
+    if (intent.type === "usage") await h.fake.emit("input", { source: "rpc" });
+    return result;
+  };
+  await h.fake.emit("message_end", { message: { role: "toolResult", toolName: "bash", usage: { input: 2 } } });
+  assert.equal(h.goalCommit.current()?.goal.usage.input, 5);
+  assert.equal(h.fake.sentMessages.length, 0);
+});
+
+test("failed tool usage persistence suppresses steering until a later tool result retries successfully", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "g", objective: "work", tokenBudget: 5 }, 0);
+  h.fake.setIdle(false);
+  await h.fake.emit("agent_start");
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "toolUse", usage: { input: 3 } } });
+  const original = h.goalCommit.commit;
+  let fail = true;
+  h.goalCommit.commit = async (intent: any, revision: number) => intent.type === "usage" && fail
+    ? { kind: "error", error: new Error("disk") } : original(intent, revision);
+  await h.fake.emit("message_end", { message: { role: "toolResult", toolName: "bash", usage: { input: 2 } } });
+  assert.equal(h.goalCommit.current()?.goal.status, "active");
+  assert.equal(h.fake.sentMessages.length, 0);
+  fail = false;
+  await h.fake.emit("message_end", { message: { role: "toolResult", toolName: "read", usage: {} } });
+  assert.equal(h.goalCommit.current()?.goal.usage.input, 5);
+  assert.equal(h.fake.sentMessages.length, 1);
+  assert.deepEqual(h.fake.sentMessages[0].options, { triggerTurn: true, deliverAs: "steer" });
+});
+
+test("replaced goal cannot receive a stale tool result budget steer", async () => {
+  const h = setup();
+  await h.goalCommit.commit({ type: "create", id: "old", objective: "work", tokenBudget: 5 }, 0);
+  h.fake.setIdle(false);
+  await h.fake.emit("agent_start");
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "toolUse", usage: { input: 5 } } });
+  await h.goalCommit.commit({ type: "replace", id: "new", objective: "new work" }, h.goalCommit.current().revision);
+  await h.fake.emit("message_end", { message: { role: "toolResult", toolName: "bash", usage: { input: 100 } } });
+  assert.equal(h.fake.sentMessages.length, 0);
+  assert.equal(h.goalCommit.current()?.goal.usage.input, 0);
 });
 
 test("verdict-commit budget flip steers exactly once", async () => {
@@ -484,8 +539,9 @@ test("budget-limit steering prompt reports accumulated wall-clock time", async (
   await h.goalCommit.commit({ type: "create", id: "g", objective: "work", tokenBudget: 5 }, 0);
   await h.fake.emit("agent_start");
   now = 2500;
-  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "stop", usage: { input: 5 } } });
-  await h.fake.emit("agent_settled");
+  h.fake.setIdle(false);
+  await h.fake.emit("message_end", { message: { role: "assistant", stopReason: "toolUse", usage: { input: 5 } } });
+  await h.fake.emit("message_end", { message: { role: "toolResult", toolName: "bash", usage: {} } });
   const prompt = h.fake.sentMessages.find((m: any) => m.message.customType === "pi-goal-next/budget_limit");
   assert.match(prompt.message.content, /Time spent pursuing goal: 2 seconds/);
 });

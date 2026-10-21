@@ -86,6 +86,14 @@ The extension requires Pi 1.1.0 or newer and uses its public event, session, mes
 
 **User sees:** A mistaken `complete` declaration is accepted at face value; the prompt is the only guard.
 
+### Token-budget steering
+
+**Cannot guarantee:** Steering cannot interrupt a model response or retract tool calls already admitted by Pi. Once queued, a steering message cannot be selectively retracted if the user subsequently cancels, changes input, or updates the goal.
+
+**What it does:** After a non-`update_goal` tool-result message has been durably accounted, rechecks the goal, token budget, run epoch, cancellation, and pending input, then sends Codex\'s budget-limit prompt with `deliverAs: "steer"` into the running loop. Parallel tools can finish before Pi delivers it. The prompt is sent at most once per goal instance; no separate token-budget closure run is started at settlement.
+
+**User sees:** The next model request after the tool batch includes the budget reminder and can close the current run. If only a final response crosses the budget and no further tool result arrives, the goal becomes `budget_limited` without waking the model again. Pi\'s separate continuation-limit closure remains a settled-run action.
+
 ### Continuation and user-input ordering
 
 **Cannot guarantee:** Event delivery and message queue timing are controlled by Pi.

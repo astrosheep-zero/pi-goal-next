@@ -13,7 +13,7 @@ export type LifecycleDeps = {
   accounting: ReturnType<typeof createAccounting>;
   clock: ReturnType<typeof createGoalClock>;
   continuation: Continuation;
-  send(message: { customType: string; content: string; display: false; details?: unknown }, options: { triggerTurn: true }): void;
+  send(message: { customType: string; content: string; display: false; details?: unknown }, options: { triggerTurn: true; deliverAs?: "steer" }): void;
   rebuild(): void;
 };
 
@@ -125,6 +125,7 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
 
   const before = async (_ctx: any) => { if (pendingRebuild) { pendingRebuild = false; await bootstrap(); } };
   pi.on("message_end", async (event: MessageEndEvent, ctx: any) => {
+    const messageEpoch = epoch;
     await before(ctx);
     syncClock();
     const m = event.message;
@@ -140,7 +141,19 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     // signature; a fresh object literal is assignable to accounting's Usage.
     const message: Message = { ...m, entryId, usage: m.usage == null ? m.usage : { ...m.usage } };
     if (!deps.accounting.hasMessage(entryId)) pendingUsage.set(entryId, { goalId: accountingGoalId, message });
-    await flushUsage();
+    if (!await flushUsage()) return;
+    // Tool-result message_end includes nested usage and precedes the next model
+    // request. Steer the live run, never wake an idle run just to report a limit.
+    if (m.role !== "toolResult" || m.toolName === "update_goal"
+      || epoch !== messageEpoch || runSignal?.aborted || inputPending
+      || ctx.isIdle() || ctx.hasPendingMessages()) return;
+    const goal = deps.goalCommit.current()?.goal;
+    if (!goal || goal.id !== accountingGoalId || goal.status !== "budget_limited"
+      || limitReason(goal) !== "token_budget") return;
+    if (goal.id !== steeredGoalId) { steeredGoalId = goal.id; steered = false; }
+    if (steered) return;
+    steered = true;
+    deps.send({ customType: "pi-goal-next/budget_limit", content: budgetLimitPrompt(goal), display: false, details: { goalId: goal.id } }, { triggerTurn: true, deliverAs: "steer" });
   });
   pi.on("agent_settled", async (event: AgentSettledEvent, ctx: any) => {
     await before(ctx);
@@ -171,9 +184,11 @@ export function registerLifecycle(pi: PiEvents, deps: LifecycleDeps): void {
     const goal = latest.goal;
     if (goal.id !== steeredGoalId) { steeredGoalId = goal.id; steered = false; }
     const reason = limitReason(goal);
-    if (goal.status === "budget_limited" && !steered && reason !== null) {
+    // Pi-only continuation exhaustion still gets its own settled-run closure.
+    // Token exhaustion is handled at tool completion, as in Codex.
+    if (goal.status === "budget_limited" && !steered && reason === "continuation_limit") {
       steered = true;
-      deps.send({ customType: "pi-goal-next/budget_limit", content: reason === "continuation_limit" ? continuationLimitPrompt(goal) : budgetLimitPrompt(goal), display: false, details: { goalId: goal.id } }, { triggerTurn: true });
+      deps.send({ customType: "pi-goal-next/budget_limit", content: continuationLimitPrompt(goal), display: false, details: { goalId: goal.id } }, { triggerTurn: true });
     }
     await deps.continuation.onSettled(canSend);
   });
