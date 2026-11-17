@@ -9,7 +9,7 @@ export type CommandDeps = {
 };
 export type CommandPiLike = { registerCommand(name: string, command: any): void };
 type Command =
-  | { kind: "show" | "pause" | "resume" | "clear" }
+  | { kind: "show" | "help" | "pause" | "resume" | "clear" }
   | { kind: "budget"; tokenBudget: number | null }
   | { kind: "turns"; value: number }
   | { kind: "edit"; objective: string }
@@ -27,6 +27,8 @@ export function parseGoalCommand(input: string): Command {
   const s = input.trim();
   if (!s) return { kind: "show" };
   const invalid = (usage: string): Command => ({ kind: "invalid", message: `Invalid /goal arguments. Usage: ${usage}` });
+  // Checked before the `-` branch so --help cannot be read as a create flag.
+  if (/^(?:help|-h|--help|\?)$/i.test(s)) return { kind: "help" };
   const simple = s.match(/^(pause|resume|clear)$/i);
   if (simple) return { kind: simple[1].toLowerCase() as "pause" | "resume" | "clear" };
   const budget = s.match(/^budget\s+(\S+)$/i);
@@ -52,6 +54,25 @@ export function parseGoalCommand(input: string): Command {
   return { kind: "create", objective: s };
 }
 
+/** The one place the command surface is described inside Pi. Kept next to the
+ * parser so a new subcommand is added in both places in the same edit. */
+const USAGE = [
+  "/goal — show this goal's status, or manage it",
+  "",
+  "  /goal                      Status, budget, usage, continuations, active time",
+  "  /goal <objective>          Create a goal, or update the unfinished goal's objective",
+  "  /goal --tokens 200k <obj>  Create with a total token budget (k/M suffixes)",
+  "  /goal edit <objective>     Update the objective in place",
+  "  /goal budget <N|none>      Set the total token budget; not additional tokens",
+  "  /goal turns <N>            Cap automatic continuations (default 32; 0 disables)",
+  "  /goal pause | resume       Stop or renew automatic continuation",
+  "  /goal clear                Remove the goal",
+  "  /goal help                 Show this usage",
+  "",
+  "A budget is cumulative: at 150k used, /goal budget 200k leaves 50k.",
+  "After raising a limit on a budget_limited goal, run /goal resume.",
+  "Model tools: get_goal, create_goal, update_goal.",
+].join("\n");
 const n = (value: number) => value.toLocaleString("en-US");
 const budgetLabel = (goal: Goal) => goal.tokenBudget === null ? "unlimited" : n(goal.tokenBudget);
 const remainingLabel = (goal: Goal) => goal.tokenBudget === null ? "unlimited" : n(Math.max(0, goal.tokenBudget - tokensUsed(goal)));
@@ -68,7 +89,7 @@ function limitDetails(goal: Goal): string[] {
   }
 }
 function formatGoal(snapshot: GoalSnapshot | null): string {
-  if (!snapshot) return "No active goal.";
+  if (!snapshot) return "No active goal. Create one with /goal <objective>, or run /goal help for every command.";
   const g = snapshot.goal, u = g.usage;
   return [
     `Status: ${g.status}`,
@@ -86,7 +107,7 @@ function formatGoal(snapshot: GoalSnapshot | null): string {
 
 export function registerGoalCommands(piLike: CommandPiLike, deps: CommandDeps): void {
   const { goalCommit } = deps;
-  piLike.registerCommand("goal", { description: "Show goal details or manage the current goal", handler: async (raw: string, ctx?: { ui?: { notify(message: string, level?: string): void } }) => {
+  piLike.registerCommand("goal", { description: "Show goal details or manage the current goal (/goal help)", handler: async (raw: string, ctx?: { ui?: { notify(message: string, level?: string): void } }) => {
     let level: "info" | "warning" | "error" = "info";
     const fail = (message: string, severity: typeof level = "warning") => { level = severity; return message; };
     const finish = (r: CommitResult, ok: string) => {
@@ -98,6 +119,7 @@ export function registerGoalCommands(piLike: CommandPiLike, deps: CommandDeps): 
       const current = goalCommit.current();
       const revision = current?.revision ?? goalCommit.getRevision();
       if (cmd.kind === "invalid") return fail(cmd.message);
+      if (cmd.kind === "help") return USAGE;
       if (cmd.kind === "show") return formatGoal(current);
       if (cmd.kind !== "create" && !current) return fail("Cannot change goal: no goal exists. Create one with /goal <objective>.");
       switch (cmd.kind) {

@@ -23,6 +23,7 @@ test("parses bare query, token suffixes, and limits", () => {
   assert.deepEqual(parseGoalCommand("budget none"), { kind: "budget", tokenBudget: null });
   assert.deepEqual(parseGoalCommand("budget 200k"), { kind: "budget", tokenBudget: 200000 });
   assert.deepEqual(parseGoalCommand("turns 12"), { kind: "turns", value: 12 });
+  for (const input of ["help", "-h", "--help", "?", "HELP"]) assert.deepEqual(parseGoalCommand(input), { kind: "help" }, input);
 });
 
 test("malformed command arguments warn without creating, editing, or starting a goal", async () => {
@@ -42,6 +43,29 @@ test("malformed command arguments warn without creating, editing, or starting a 
   assert.match(await empty.command.handler("--tokens nope work"), /Invalid.*Usage/);
   assert.equal(empty.snapshot(), null);
   assert.equal(empty.kicks(), 0);
+});
+
+test("help lists the whole command surface without mutating or creating a goal", async () => {
+  for (const input of ["help", "-h", "--help", "?"]) {
+    const h = setup();
+    const notifications: any[] = [];
+    const before = h.snapshot();
+    const message = await h.command.handler(input, { ui: { notify: (...args: any[]) => notifications.push(args) } });
+    for (const usage of ["/goal <objective>", "/goal --tokens 200k <obj>", "/goal edit <objective>", "/goal budget <N|none>",
+      "/goal turns <N>", "/goal pause | resume", "/goal clear", "/goal help", "cumulative"]) {
+      assert.ok(message.includes(usage), `${input}: ${usage}`);
+    }
+    assert.equal(notifications[0][1], "info", input);
+    assert.equal(h.calls.length, 0, input);
+    assert.equal(h.sent.length, 0, input);
+    assert.equal(h.kicks(), 0, input);
+    assert.deepEqual(h.snapshot(), before, input);
+  }
+  const empty = setup(null);
+  assert.match(await empty.command.handler("help"), /\/goal help/);
+  assert.equal(empty.snapshot(), null, "help never creates a goal");
+  assert.equal(empty.kicks(), 0);
+  assert.deepEqual(parseGoalCommand("help me fix the build"), { kind: "create", objective: "help me fix the build" });
 });
 
 test("limit-change receipts report totals, retained usage and counter, and unchanged goal status", async () => {
@@ -109,7 +133,7 @@ test("bare /goal distinguishes unbounded tokens from exhausted continuations, an
   assert.doesNotMatch(message, /Unknown-usage/);
   const bounded = setup({ goal: { ...goal, tokenBudget: 2000, usage: { ...goal.usage, input: 100 } }, revision: 4 });
   assert.match(await bounded.command.handler(""), /Tokens remaining: 1,900/);
-  assert.equal(await setup(null).command.handler(""), "No active goal.");
+  assert.match(await setup(null).command.handler(""), /^No active goal\. .*\/goal help/);
   assert.match(await setup({ goal: { ...goal, status: "complete" }, revision: 4 }).command.handler(""), /Status: complete/);
 });
 

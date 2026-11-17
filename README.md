@@ -17,6 +17,7 @@ For a project-local extension, add the package path to the project's Pi extensio
 `/goal` shows the current goal's status, objective, token budget, total usage (including input, output, and cache breakdown), remaining tokens, used/remaining continuation allowance, and recorded active time. Unset token budgets are shown as `unlimited`; missing usage is flagged when token totals may be incomplete. Limited goals show the specific limit and recovery command; token breakdowns are on separate lines and active time uses hours/minutes/seconds. All extension-provided messages and prompts are in English; user-provided objectives are preserved as written.
 
 ```text
+/goal help
 /goal Implement the migration and verify it with tests
 /goal --tokens 200k Implement the migration
 /goal
