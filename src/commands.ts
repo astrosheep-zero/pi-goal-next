@@ -26,7 +26,7 @@ function parseTokens(text: string, minimum = 0): number | undefined {
 export function parseGoalCommand(input: string): Command {
   const s = input.trim();
   if (!s) return { kind: "show" };
-  const invalid = (usage: string): Command => ({ kind: "invalid", message: `Invalid /goal arguments. Usage: ${usage}` });
+  const invalid = (usage: string): Command => ({ kind: "invalid", message: `Invalid /goal arguments. Usage: ${usage}. Run /goal help for every command.` });
   // The bare word only: no flag aliases. Checked before the `-` branch so a
   // leading dash can never be read as a create flag.
   if (/^help$/i.test(s)) return { kind: "help" };
@@ -50,7 +50,11 @@ export function parseGoalCommand(input: string): Command {
   if (s.startsWith("-")) {
     const create = s.match(/^--tokens\s+(\S+)\s+([\s\S]+)$/i);
     const value = create ? parseTokens(create[1], 1) : undefined;
-    return create && value !== undefined ? { kind: "create", objective: create[2], tokenBudget: value } : invalid("/goal --tokens <positive tokens[k|M]> <objective>");
+    if (create && value !== undefined) return { kind: "create", objective: create[2], tokenBudget: value };
+    // A stray flag is not a malformed --tokens call; naming it as an unknown
+    // option is what an alias habit (-h, --help) actually needs to read.
+    if (!/^--tokens\b/i.test(s)) return { kind: "invalid", message: `Unknown /goal option: ${/^\S+/.exec(s)?.[0] ?? s}. Run /goal help for every command.` };
+    return invalid("/goal --tokens <positive tokens[k|M]> <objective>");
   }
   return { kind: "create", objective: s };
 }

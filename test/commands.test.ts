@@ -25,6 +25,12 @@ test("parses bare query, token suffixes, and limits", () => {
   assert.deepEqual(parseGoalCommand("turns 12"), { kind: "turns", value: 12 });
   for (const input of ["help", "HELP", " help "]) assert.deepEqual(parseGoalCommand(input), { kind: "help" }, input);
   for (const input of ["-h", "--help", "?", "usage"]) assert.notEqual(parseGoalCommand(input).kind, "help", input);
+  for (const input of ["-h", "--help"]) {
+    const parsed = parseGoalCommand(input);
+    assert.equal(parsed.kind, "invalid", input);
+    assert.match((parsed as { message: string }).message, /Unknown \/goal option: -/, input);
+    assert.match((parsed as { message: string }).message, /Run \/goal help/, input);
+  }
 });
 
 test("malformed command arguments warn without creating, editing, or starting a goal", async () => {
@@ -34,6 +40,7 @@ test("malformed command arguments warn without creating, editing, or starting a 
     const before = h.snapshot();
     const message = await h.command.handler(input, { ui: { notify: (...args: any[]) => notifications.push(args) } });
     assert.match(message, /Invalid.*Usage: \/goal/);
+    assert.match(message, /Run \/goal help for every command/, input);
     assert.equal(notifications[0][1], "warning");
     assert.equal(h.calls.length, 0);
     assert.equal(h.sent.length, 0);
