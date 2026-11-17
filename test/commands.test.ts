@@ -23,7 +23,8 @@ test("parses bare query, token suffixes, and limits", () => {
   assert.deepEqual(parseGoalCommand("budget none"), { kind: "budget", tokenBudget: null });
   assert.deepEqual(parseGoalCommand("budget 200k"), { kind: "budget", tokenBudget: 200000 });
   assert.deepEqual(parseGoalCommand("turns 12"), { kind: "turns", value: 12 });
-  for (const input of ["help", "-h", "--help", "?", "HELP"]) assert.deepEqual(parseGoalCommand(input), { kind: "help" }, input);
+  for (const input of ["help", "HELP", " help "]) assert.deepEqual(parseGoalCommand(input), { kind: "help" }, input);
+  for (const input of ["-h", "--help", "?", "usage"]) assert.notEqual(parseGoalCommand(input).kind, "help", input);
 });
 
 test("malformed command arguments warn without creating, editing, or starting a goal", async () => {
@@ -46,7 +47,7 @@ test("malformed command arguments warn without creating, editing, or starting a 
 });
 
 test("help lists the whole command surface without mutating or creating a goal", async () => {
-  for (const input of ["help", "-h", "--help", "?"]) {
+  for (const input of ["help", "HELP"]) {
     const h = setup();
     const notifications: any[] = [];
     const before = h.snapshot();

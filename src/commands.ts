@@ -27,8 +27,9 @@ export function parseGoalCommand(input: string): Command {
   const s = input.trim();
   if (!s) return { kind: "show" };
   const invalid = (usage: string): Command => ({ kind: "invalid", message: `Invalid /goal arguments. Usage: ${usage}` });
-  // Checked before the `-` branch so --help cannot be read as a create flag.
-  if (/^(?:help|-h|--help|\?)$/i.test(s)) return { kind: "help" };
+  // The bare word only: no flag aliases. Checked before the `-` branch so a
+  // leading dash can never be read as a create flag.
+  if (/^help$/i.test(s)) return { kind: "help" };
   const simple = s.match(/^(pause|resume|clear)$/i);
   if (simple) return { kind: simple[1].toLowerCase() as "pause" | "resume" | "clear" };
   const budget = s.match(/^budget\s+(\S+)$/i);
