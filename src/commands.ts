@@ -62,22 +62,26 @@ export function parseGoalCommand(input: string): Command {
 /** The one place the command surface is described inside Pi. Kept next to the
  * parser so a new subcommand is added in both places in the same edit. */
 const USAGE = [
-  "/goal — show this goal's status, or manage it",
+  "/goal — status and control",
   "",
-  "  /goal                      Status, budget, usage, continuations, active time",
-  "  /goal <objective>          Create a goal, or update the unfinished goal's objective",
-  "  /goal --tokens 200k <obj>  Create with a total token budget (k/M suffixes)",
-  "  /goal edit <objective>     Update the objective in place",
-  "  /goal budget <N|none>      Set the total token budget; not additional tokens",
-  "  /goal turns <N>            Cap automatic continuations (default 32; 0 disables)",
-  "  /goal pause | resume       Stop or renew automatic continuation",
-  "  /goal clear                Remove the goal",
-  "  /goal help                 Show this usage",
+  "  /goal                      status, budget, usage, continuations",
+  "  /goal <objective>          create a goal, or update this one",
+  "  /goal --tokens 200k <obj>  create with a total budget",
+  "  /goal edit <objective>     update the objective",
+  "  /goal budget <N|none>      total budget, not additional",
+  "  /goal turns <N>            continuation limit (default 32)",
+  "  /goal pause | resume       stop or renew continuations",
+  "  /goal clear                remove the goal",
+  "  /goal help                 this list",
   "",
-  "A budget is cumulative: at 150k used, /goal budget 200k leaves 50k.",
-  "After raising a limit on a budget_limited goal, run /goal resume.",
-  "Model tools: get_goal, create_goal, update_goal.",
+  "A budget is cumulative. Raise a limit, then /goal resume.",
 ].join("\n");
+/** A one-line echo of the stored objective, so an update shows what it became. */
+const PREVIEW_MAX = 160;
+export function objectivePreview(objective: string): string {
+  const line = objective.replace(/\s+/g, " ").trim();
+  return line.length > PREVIEW_MAX ? `${line.slice(0, PREVIEW_MAX)}…` : line;
+}
 const n = (value: number) => value.toLocaleString("en-US");
 const budgetLabel = (goal: Goal) => goal.tokenBudget === null ? "unlimited" : n(goal.tokenBudget);
 const remainingLabel = (goal: Goal) => goal.tokenBudget === null ? "unlimited" : n(Math.max(0, goal.tokenBudget - tokensUsed(goal)));
@@ -88,25 +92,26 @@ function formatTime(seconds: number): string {
 function limitDetails(goal: Goal): string[] {
   if (goal.status !== "budget_limited") return [];
   switch (limitReason(goal)) {
-    case "token_budget": return ["Limit reached: token budget.", "Next: increase the total with /goal budget <N>, or remove the cap with /goal budget none; then /goal resume."];
-    case "continuation_limit": return ["Limit reached: automatic continuation allowance.", goal.maxContinuations === 0 ? "Next: set /goal turns <N> above zero, then /goal resume." : "Next: /goal resume renews the continuation allowance; token usage is preserved."];
-    default: return ["Limits are no longer exceeded. Next: /goal resume."];
+    case "token_budget": return ["Limit: token budget.", "Next: /goal budget <N|none>, then /goal resume."];
+    case "continuation_limit": return ["Limit: continuations.", goal.maxContinuations === 0 ? "Next: /goal turns <N> above zero, then /goal resume." : "Next: /goal resume."];
+    default: return ["Limits cleared.", "Next: /goal resume."];
   }
 }
 function formatGoal(snapshot: GoalSnapshot | null): string {
-  if (!snapshot) return "No active goal. Create one with /goal <objective>, or run /goal help for every command.";
+  if (!snapshot) return "No active goal. /goal <objective> to start; /goal help for commands.";
   const g = snapshot.goal, u = g.usage;
   return [
     `Status: ${g.status}`,
     `Objective: ${g.objective}`,
     ...limitDetails(g),
-    `Tokens: ${n(tokensUsed(g))} used / ${budgetLabel(g)} total budget`,
-    `Tokens remaining: ${remainingLabel(g)}`,
+    g.tokenBudget === null
+      ? `Tokens: ${n(tokensUsed(g))} used · unlimited budget`
+      : `Tokens: ${n(tokensUsed(g))} used / ${n(g.tokenBudget)} budget · ${remainingLabel(g)} left`,
     `Input: ${n(u.input)} · Output: ${n(u.output)}`,
     `Cache read: ${n(u.cacheRead)} · Cache write: ${n(u.cacheWrite)}`,
-    `Continuations: ${g.continuationSeq}/${g.maxContinuations} used (${Math.max(0, g.maxContinuations - g.continuationSeq)} remaining)`,
-    `Recorded active time: ${formatTime(g.timeUsedSeconds ?? 0)}`,
-    ...(u.unknownMessages > 0 ? [`Unknown-usage messages: ${u.unknownMessages} (token totals may be incomplete)`] : [])
+    `Continuations: ${g.continuationSeq}/${g.maxContinuations}`,
+    `Active time: ${formatTime(g.timeUsedSeconds ?? 0)}`,
+    ...(u.unknownMessages > 0 ? [`Unknown usage: ${u.unknownMessages} message${u.unknownMessages === 1 ? "" : "s"} (totals may be incomplete)`] : [])
   ].join("\n");
 }
 
@@ -120,55 +125,60 @@ export function registerGoalCommands(piLike: CommandPiLike, deps: CommandDeps): 
       if (r.kind === "conflict") return fail("Goal changed during the command. Retry with the current goal.");
       return fail(`Goal update failed: ${r.error instanceof Error ? r.error.message : String(r.error)}`, "error");
     };
+    /** Success keeps a one-line echo of the stored objective under the headline. */
+    const withPreview = (r: CommitResult, headline: string): string =>
+      r.kind === "ok" && r.snapshot ? `${headline}\n${objectivePreview(r.snapshot.goal.objective)}` : finish(r, headline);
     const run = async (cmd: Command): Promise<string> => {
       const current = goalCommit.current();
       const revision = current?.revision ?? goalCommit.getRevision();
       if (cmd.kind === "invalid") return fail(cmd.message);
       if (cmd.kind === "help") return USAGE;
       if (cmd.kind === "show") return formatGoal(current);
-      if (cmd.kind !== "create" && !current) return fail("Cannot change goal: no goal exists. Create one with /goal <objective>.");
+      if (cmd.kind !== "create" && !current) return fail("No goal to change. Start one with /goal <objective>.");
       switch (cmd.kind) {
         case "create": {
           // Codex thread/goal/set semantics: preserve the unfinished goal's identity and cumulative usage.
           if (current && current.goal.status !== "complete") {
             const r = await goalCommit.commit({ type: "update_objective", objective: cmd.objective, ...(cmd.tokenBudget === undefined ? {} : { tokenBudget: cmd.tokenBudget }) }, revision);
             if (r.kind === "ok" && r.snapshot) deps.send({ customType: "pi-goal-next/objective_updated", content: objectiveUpdatedPrompt(r.snapshot.goal), display: false, details: { goalId: r.snapshot.goal.id } }, { triggerTurn: true });
-            return finish(r, "Goal updated.");
+            return withPreview(r, "Goal updated.");
           }
           const r = await goalCommit.commit({ type: "create", id: newGoalId(), objective: cmd.objective, tokenBudget: cmd.tokenBudget ?? null }, revision);
           if (r.kind === "ok") await deps.kick();
-          return finish(r, "Goal created.");
+          return withPreview(r, "Goal created.");
         }
         case "edit": {
           const r = await goalCommit.commit({ type: "update_objective", objective: cmd.objective }, revision);
           if (r.kind === "ok" && r.snapshot) deps.send({ customType: "pi-goal-next/objective_updated", content: objectiveUpdatedPrompt(r.snapshot.goal), display: false, details: { goalId: r.snapshot.goal.id } }, { triggerTurn: true });
-          return finish(r, "Goal edited.");
+          return withPreview(r, "Goal updated.");
         }
-        case "clear": return finish(await goalCommit.commit({ type: "clear" }, revision), "Goal cleared. Automatic goal continuation is disabled; running model/tool work is not interrupted.");
+        case "clear": return finish(await goalCommit.commit({ type: "clear" }, revision), "Goal cleared.");
         case "pause": {
           if (current!.goal.status === "complete") return fail("Cannot pause: goal is complete.");
           if (current!.goal.status === "paused") return "Goal is already paused. Automatic goal continuation is disabled; running model/tool work is not interrupted.";
-          return finish(await goalCommit.commit({ type: "transition", to: "paused", by: "user", userRequest: '"/goal pause"' }, revision), "Goal paused. Automatic goal continuation is disabled; running model/tool work is not interrupted.");
+          return finish(await goalCommit.commit({ type: "transition", to: "paused", by: "user", userRequest: '"/goal pause"' }, revision), "Goal paused.");
         }
         case "resume": {
           const goal = current!.goal;
           if (goal.status === "complete") return fail("Cannot resume: goal is complete. Start a new goal with /goal <objective>.");
-          if (limitReason(goal) === "token_budget") return fail(`Cannot resume: token budget exhausted (${n(tokensUsed(goal))}/${budgetLabel(goal)} used). Increase the total with /goal budget <N>, or remove the cap with /goal budget none; then /goal resume. Cumulative usage is preserved.`);
-          if (goal.maxContinuations === 0) return fail("Cannot resume: continuation allowance is zero. Set /goal turns <N> above zero, then /goal resume.");
+          if (limitReason(goal) === "token_budget") return fail(`Cannot resume: budget exhausted (${n(tokensUsed(goal))}/${budgetLabel(goal)}). Raise it with /goal budget <N|none>, then /goal resume.`);
+          if (goal.maxContinuations === 0) return fail("Cannot resume: continuation limit is 0. Set /goal turns <N>, then /goal resume.");
           const r = await goalCommit.commit({ type: "transition", to: "active", by: "user", resetContinuations: true }, revision);
           if (r.kind === "ok") await deps.kick();
-          return finish(r, `Goal resumed. Continuation counter reset (limit: ${goal.maxContinuations}).\nToken usage preserved: ${n(tokensUsed(goal))}; total budget: ${budgetLabel(goal)}; remaining: ${remainingLabel(goal)}.`);
+          return finish(r, `Goal resumed. Continuations 0/${goal.maxContinuations} · tokens ${n(tokensUsed(goal))} used / ${budgetLabel(goal)}.`);
         }
         case "budget": {
           const goal = current!.goal;
           const r = await goalCommit.commit({ type: "limit_config", tokenBudget: cmd.tokenBudget, maxContinuations: goal.maxContinuations }, revision);
           const updated = { ...goal, tokenBudget: cmd.tokenBudget };
-          return finish(r, `Total token budget: ${budgetLabel(updated)} (not additional tokens). Used: ${n(tokensUsed(goal))}; remaining: ${remainingLabel(updated)}.\nGoal status unchanged: ${goal.status}.${goal.status === "budget_limited" ? " Use /goal resume after adjusting limits." : ""}`);
+          const hint = goal.status === "budget_limited" ? " Run /goal resume." : "";
+          return finish(r, `Token budget: ${budgetLabel(updated)} total · ${n(tokensUsed(goal))} used · ${remainingLabel(updated)} left.${hint}`);
         }
         case "turns": {
           const goal = current!.goal;
           const r = await goalCommit.commit({ type: "limit_config", tokenBudget: goal.tokenBudget, maxContinuations: cmd.value }, revision);
-          return finish(r, `Continuation limit: ${cmd.value}. Used: ${goal.continuationSeq}; remaining: ${Math.max(0, cmd.value - goal.continuationSeq)}. ${cmd.value === 0 ? "Zero disables automatic goal continuation; set a positive limit before /goal resume." : "Counter unchanged; /goal resume resets it."}\nGoal status unchanged: ${goal.status}.`);
+          const tail = cmd.value === 0 ? " Zero stops continuation; set it above zero before /goal resume." : "";
+          return finish(r, `Continuation limit: ${cmd.value} · ${goal.continuationSeq} used · ${Math.max(0, cmd.value - goal.continuationSeq)} left.${tail}`);
         }
       }
     };

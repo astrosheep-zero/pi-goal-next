@@ -47,18 +47,18 @@ test("update_goal uses the current revision and never terminates the turn", asyn
   assert.equal(conflict.calls[0].revision, 7);
   const complete = setup();
   const result = await invoke(complete.tools[2], { status: "complete" });
-  assert.match(result.content[0].text, /Final token usage/);
+  assert.match(result.content[0].text, /Tokens \d+ total/);
   assert.equal("terminate" in result, false);
   assert.equal(complete.calls[0].intent.to, "complete");
   const blocked = await invoke(setup().tools[2], { status: "blocked" });
-  assert.equal(blocked.content[0].text, "Goal marked blocked.");
+  assert.equal(blocked.content[0].text, "Goal blocked.");
   assert.equal("terminate" in blocked, false);
 });
 
 test("update_goal pauses an unfinished goal at the user's explicit request (Codex latest)", async () => {
   const { tools, calls } = setup();
   const out = await invoke(tools[2], { status: "paused" });
-  assert.equal(out.content[0].text, "Goal marked paused.");
+  assert.equal(out.content[0].text, "Goal paused.");
   assert.deepEqual(calls[0].intent, { type: "transition", to: "paused", by: "agent" });
   const entries: Entry[] = [{ type: "goal.created", version: 1, seq: 1, goal: { ...goal, status: "complete" as const } }];
   const goalCommit = createGoalCommit({ readBranch: () => entries, append: entry => { entries.push(entry); } });
@@ -75,7 +75,7 @@ test("create_goal recreates after clear using the current revision", async () =>
   await goalCommit.commit({ type: "clear" }, goalCommit.getRevision());
   const tools: any[] = [];
   registerGoalTools({ registerTool: tool => tools.push(tool) }, { goalCommit });
-  assert.equal(await body(tools[1], { objective: "again" }), "Goal created.");
+  assert.equal(await body(tools[1], { objective: "again" }), "Goal created.\nagain");
   assert.equal(goalCommit.current()?.goal.objective, "again");
 });
 
@@ -86,7 +86,7 @@ test("update_goal completes budget-limited goals but refuses paused and blocked 
     const tools: any[] = [];
     registerGoalTools({ registerTool: tool => tools.push(tool) }, { goalCommit });
     const response = await invoke(tools[2], { status: "complete" });
-    if (status === "budget_limited") assert.match(response.content[0].text, /Final token usage/);
+    if (status === "budget_limited") assert.match(response.content[0].text, /Tokens \d+ total/);
     else assert.match(response.content[0].text, /only an active or budget-limited goal/);
     assert.equal(goalCommit.current()?.goal.status, status === "budget_limited" ? "complete" : status);
   }

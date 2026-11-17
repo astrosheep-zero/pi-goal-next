@@ -42,7 +42,7 @@ export function registerGoalTools(piLike: PiLike, deps: GoalToolDeps): void {
       const revision = current?.revision ?? goalCommit.getRevision();
       const intent: Intent = { type: "create", id: newGoalId(), objective: params.objective, tokenBudget: params.token_budget ?? null };
       const r = await goalCommit.commit(intent, revision);
-      return result(r.kind === "ok" ? "Goal created." : commitMessage(r));
+      return result(r.kind === "ok" ? `Goal created.\n${params.objective.replace(/\s+/g, " ").trim()}` : commitMessage(r));
     }
   });
   piLike.registerTool({
@@ -57,12 +57,12 @@ export function registerGoalTools(piLike: PiLike, deps: GoalToolDeps): void {
       if (!expected) return result(`Invalid status: ${text(params?.status)} is not complete or blocked.`);
       const r = await goalCommit.commit({ type: "transition", to: status, by: "agent" }, current.revision);
       if (r.kind !== "ok") return result(commitMessage(r));
-      if (status === "blocked") return result("Goal marked blocked.");
-      if (status === "paused") return result("Goal marked paused.");
+      if (status === "blocked") return result("Goal blocked.");
+      if (status === "paused") return result("Goal paused.");
       const u = (r.snapshot?.goal ?? current.goal).usage;
       const total = u.input + u.output + u.cacheRead + u.cacheWrite;
       const secs = (r.snapshot?.goal ?? current.goal).timeUsedSeconds ?? 0;
-      return result(`Goal marked complete. Final token usage: input=${u.input} output=${u.output} cacheRead=${u.cacheRead} cacheWrite=${u.cacheWrite} (total=${total}). Time used: ${secs} seconds.`);
+      return result(`Goal complete. Tokens ${total} total (input ${u.input} · output ${u.output} · cache read ${u.cacheRead} · cache write ${u.cacheWrite}); active time ${secs}s.`);
     }
   });
 }

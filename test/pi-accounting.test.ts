@@ -72,13 +72,13 @@ test("real Pi: bare /goal reports exhausted budget through UI without starting i
   const message = h.notifications.at(-1)!;
   assert.match(message, /Status: budget_limited/);
   assert.match(message, /Objective: verify this task/);
-  assert.match(message, /Tokens: 11 used \/ 10 total budget/);
+  assert.match(message, /Tokens: 11 used \/ 10 budget/);
   assert.equal(calls, 1); // A final response crossing the budget does not start a closure run.
   assert.equal(branch.some((e: any) => e.customType === "pi-goal-next/budget_limit"), false);
-  assert.match(message, /Limit reached: token budget/);
-  assert.match(message, /Tokens remaining: 0/);
-  assert.match(message, /Continuations: 1\/32 used/);
-  assert.match(message, /Recorded active time: \d+s/);
+  assert.match(message, /Limit: token budget/);
+  assert.match(message, /0 left/);
+  assert.match(message, /Continuations: 1\/32/);
+  assert.match(message, /Active time: \d+s/);
   assert.equal(h.calls(), calls);
   assert.deepEqual(h.session.sessionManager.getBranch(), branch);
   await h.session.prompt("/goal budget nonsense");
@@ -97,9 +97,9 @@ test("real Pi: continuation exhaustion sends the correct closure and recovery de
   assert.match(closure.content, /automatic continuation limit, not its token budget/);
   assert.doesNotMatch(closure.content, /has reached its token budget/);
   await h.session.prompt("/goal");
-  assert.match(h.notifications.at(-1)!, /Limit reached: automatic continuation allowance/);
+  assert.match(h.notifications.at(-1)!, /Limit: continuations/);
   assert.match(h.notifications.at(-1)!, /Next: \/goal resume/);
-  assert.match(h.notifications.at(-1)!, /Tokens remaining: 967/);
+  assert.match(h.notifications.at(-1)!, /967 left/);
   assert.equal(h.calls(), 2);
 });
 
@@ -122,7 +122,7 @@ test("real Pi: token exhaustion steers after the tool batch before the closing r
   assert.ok(branch.findLastIndex(e => e.message?.role === "toolResult") < closureIndex);
   assert.ok(closureIndex < branch.findLastIndex(e => e.message?.role === "assistant"));
   await h.session.prompt("/goal");
-  assert.match(h.notifications.at(-1)!, /Tokens: 33 used \/ 10 total budget/);
+  assert.match(h.notifications.at(-1)!, /Tokens: 33 used \/ 10 budget/);
   assert.equal(h.continuations().length, 1);
 });
 
@@ -155,7 +155,7 @@ test("real Pi: budget crossing before completion tool permits completion; final 
   assert.equal(usage().length, 3); // tool-call assistant, its tool result, and the closing reply
   const result = h.session.sessionManager.getBranch().find((e: any) => e.message?.role === "toolResult") as any;
   assert.equal(result.message.isError, false);
-  assert.match(result.message.content[0].text, /Goal marked complete/);
+  assert.match(result.message.content[0].text, /Goal complete\. Tokens 11 total/);
   await h.session.prompt("unrelated question");
   await h.settle();
   assert.equal(h.calls(), 3);

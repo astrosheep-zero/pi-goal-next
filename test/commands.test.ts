@@ -79,31 +79,31 @@ test("help lists the whole command surface without mutating or creating a goal",
 test("limit-change receipts report totals, retained usage and counter, and unchanged goal status", async () => {
   const h = setup({ goal: { ...goal, status: "budget_limited", tokenBudget: 100, continuationSeq: 25, usage: { ...goal.usage, input: 125 } }, revision: 4 });
   const message = await h.command.handler("budget 200k");
-  assert.match(message, /Total token budget: 200,000 \(not additional tokens\)/);
-  assert.match(message, /Used: 125; remaining: 199,875/);
-  assert.match(message, /status unchanged: budget_limited.*\/goal resume/);
+  assert.match(message, /Token budget: 200,000 total/);
+  assert.match(message, /125 used · 199,875 left/);
+  assert.match(message, /Run \/goal resume\./);
   assert.equal(h.snapshot()!.goal.tokenBudget, 200000);
   assert.equal(h.snapshot()!.goal.usage.input, 125);
   assert.equal(h.kicks(), 0);
-  assert.match(await h.command.handler("turns 40"), /limit: 40.*Used: 25; remaining: 15.*Counter unchanged/);
+  assert.match(await h.command.handler("turns 40"), /Continuation limit: 40 · 25 used · 15 left/);
   assert.equal(h.snapshot()!.goal.continuationSeq, 25);
   assert.equal(h.snapshot()!.goal.status, "budget_limited");
   const resumed = await h.command.handler("resume");
-  assert.match(resumed, /counter reset.*limit: 40/);
-  assert.match(resumed, /Token usage preserved: 125; total budget: 200,000; remaining: 199,875/);
+  assert.match(resumed, /Goal resumed\. Continuations 0\/40/);
+  assert.match(resumed, /tokens 125 used \/ 200,000/);
   assert.equal(h.snapshot()!.goal.continuationSeq, 0);
 });
 
 test("details explain adjusted limits and format hours; commands without a goal warn", async () => {
   const h = setup({ goal: { ...goal, status: "budget_limited", timeUsedSeconds: 3665 }, revision: 4 });
   const details = await h.command.handler("");
-  assert.match(details, /Limits are no longer exceeded.*\/goal resume/);
-  assert.match(details, /Recorded active time: 1h 1m 5s/);
+  assert.match(details, /Limits cleared\.\nNext: \/goal resume/);
+  assert.match(details, /Active time: 1h 1m 5s/);
   const disabled = setup({ goal: { ...goal, status: "budget_limited", maxContinuations: 0 }, revision: 4 });
-  assert.match(await disabled.command.handler(""), /Next: set \/goal turns <N> above zero/);
+  assert.match(await disabled.command.handler(""), /Next: \/goal turns <N> above zero/);
   const empty = setup(null);
   const notifications: any[] = [];
-  assert.match(await empty.command.handler("budget 100", { ui: { notify: (...args: any[]) => notifications.push(args) } }), /no goal exists.*\/goal <objective>/);
+  assert.match(await empty.command.handler("budget 100", { ui: { notify: (...args: any[]) => notifications.push(args) } }), /No goal to change.*\/goal <objective>/);
   assert.equal(notifications[0][1], "warning");
   assert.equal(empty.calls.length, 0);
 });
@@ -115,15 +115,14 @@ test("bare /goal shows budget, usage, continuations, and active time through not
   const message = await h.command.handler("", { ui: { notify: (...args: any[]) => notifications.push(args) } });
   assert.match(message, /Status: budget_limited/);
   assert.match(message, /Objective: 32k input within 90 seconds/);
-  assert.match(message, /Limit reached: token budget/);
-  assert.match(message, /Next:.*\/goal budget.*\/goal resume/);
-  assert.match(message, /Tokens: 1,250 used \/ 1,000 total budget/);
+  assert.match(message, /Limit: token budget/);
+  assert.match(message, /Next: \/goal budget <N\|none>, then \/goal resume\./);
+  assert.match(message, /Tokens: 1,250 used \/ 1,000 budget · 0 left/);
   assert.match(message, /Input: 700 · Output: 200/);
   assert.match(message, /Cache read: 300 · Cache write: 50/);
-  assert.match(message, /Tokens remaining: 0/);
-  assert.match(message, /Continuations: 2\/25 used \(23 remaining\)/);
-  assert.match(message, /Recorded active time: 1m 30s/);
-  assert.match(message, /Unknown-usage messages: 1.*incomplete/);
+    assert.match(message, /Continuations: 2\/25/);
+  assert.match(message, /Active time: 1m 30s/);
+  assert.match(message, /Unknown usage: 1 message.*incomplete/);
   assert.deepEqual(notifications, [[message, "info"]]);
   assert.equal(h.calls.length, 0);
   assert.equal(h.sent.length, 0);
@@ -133,28 +132,27 @@ test("bare /goal shows budget, usage, continuations, and active time through not
 test("bare /goal distinguishes unbounded tokens from exhausted continuations, and shows remaining bounded tokens", async () => {
   const h = setup({ goal: { ...goal, status: "budget_limited", continuationSeq: 25 }, revision: 4 });
   const message = await h.command.handler(" ");
-  assert.match(message, /Tokens: 0 used \/ unlimited total budget/);
-  assert.match(message, /Limit reached: automatic continuation allowance/);
+  assert.match(message, /Tokens: 0 used · unlimited budget/);
+  assert.match(message, /Limit: continuations/);
   assert.match(message, /Next: \/goal resume/);
-  assert.match(message, /Tokens remaining: unlimited/);
-  assert.match(message, /Continuations: 25\/25 used \(0 remaining\)/);
-  assert.doesNotMatch(message, /Unknown-usage/);
+    assert.match(message, /Continuations: 25\/25/);
+  assert.doesNotMatch(message, /Unknown usage/);
   const bounded = setup({ goal: { ...goal, tokenBudget: 2000, usage: { ...goal.usage, input: 100 } }, revision: 4 });
-  assert.match(await bounded.command.handler(""), /Tokens remaining: 1,900/);
+  assert.match(await bounded.command.handler(""), /1,900 left/);
   assert.match(await setup(null).command.handler(""), /^No active goal\. .*\/goal help/);
   assert.match(await setup({ goal: { ...goal, status: "complete" }, revision: 4 }).command.handler(""), /Status: complete/);
 });
 
 test("clear, pause, and resume commit user flows", async () => {
   const { command, calls, kicks } = setup();
-  assert.match(await command.handler("pause"), /Goal paused.*continuation is disabled.*work is not interrupted/);
+  assert.equal(await command.handler("pause"), "Goal paused.");
   assert.deepEqual(calls[0], { intent: { type: "transition", to: "paused", by: "user", userRequest: '"/goal pause"' }, revision: 4 });
   const resumed = await command.handler("resume");
-  assert.match(resumed, /Goal resumed.*counter reset.*limit: 25/);
-  assert.match(resumed, /Token usage preserved: 0; total budget: unlimited/);
+  assert.match(resumed, /Goal resumed\. Continuations 0\/25/);
+  assert.match(resumed, /tokens 0 used \/ unlimited/);
   assert.deepEqual(calls[1].intent, { type: "transition", to: "active", by: "user", resetContinuations: true });
   assert.equal(kicks(), 1);
-  assert.match(await command.handler("clear"), /Goal cleared.*continuation is disabled.*work is not interrupted/);
+  assert.equal(await command.handler("clear"), "Goal cleared.");
   assert.deepEqual(calls[2].intent, { type: "clear" });
 });
 
@@ -169,8 +167,8 @@ for (const status of ["paused", "budget_limited", "blocked", "active"] as const)
     let command: any;
     registerGoalCommands({ registerCommand: (_name, c) => { command = c; } }, { goalCommit, send: () => {}, kick: continuation.onSettled });
     const resumed = await command.handler("resume");
-    assert.match(resumed, /counter reset.*limit: 25/);
-    assert.match(resumed, /Token usage preserved: 15; total budget: 100; remaining: 85/);
+    assert.match(resumed, /Continuations 0\/25/);
+    assert.match(resumed, /tokens 15 used \/ 100/);
     assert.equal(sent.length, 1);
     assert.equal(sent[0].details.seq, 1);
     const restored = createGoalCommit(store).current()!.goal;
@@ -181,26 +179,39 @@ for (const status of ["paused", "budget_limited", "blocked", "active"] as const)
 
 test("exhausted token budget refuses resume without resetting usage or kicking", async () => {
   const h = setup({ goal: { ...goal, tokenBudget: 10, usage: { ...goal.usage, input: 10 } }, revision: 4 });
-  assert.match(await h.command.handler("resume"), /token budget exhausted/);
+  assert.match(await h.command.handler("resume"), /budget exhausted \(10\/10\)/);
   assert.equal(h.calls.length, 0);
   assert.equal(h.kicks(), 0);
 });
 
 test("zero continuation allowance refuses resume explicitly", async () => {
   const h = setup({ goal: { ...goal, maxContinuations: 0 }, revision: 4 });
-  assert.match(await h.command.handler("resume"), /allowance is zero/);
+  assert.match(await h.command.handler("resume"), /continuation limit is 0/);
   assert.equal(h.calls.length, 0);
   assert.equal(h.kicks(), 0);
 });
 
+test("objective updates echo the stored objective as a bounded one-line preview", async () => {
+  const h = setup({ goal: { ...goal, status: "paused" }, revision: 4 });
+  assert.equal(await h.command.handler("line one\n  line two"), "Goal updated.\nline one line two");
+  const long = "word ".repeat(80).trim();
+  const receipt = await h.command.handler(long);
+  const [headline, preview] = receipt.split("\n");
+  assert.equal(headline, "Goal updated.");
+  assert.equal(preview.length, 161, "the preview is bounded");
+  assert.ok(preview.endsWith("…"));
+  assert.equal(h.snapshot()!.goal.objective, long, "the stored objective keeps the full text");
+  assert.equal(await h.command.handler("edit short new"), "Goal updated.\nshort new");
+});
+
 test("create kicks; bare create with an unfinished goal updates the objective in place (Codex set semantics)", async () => {
   const created = setup(null);
-  assert.equal(await created.command.handler("brand new"), "Goal created.");
+  assert.equal(await created.command.handler("brand new"), "Goal created.\nbrand new");
   assert.equal(created.kicks(), 1);
   assert.equal(created.sent.length, 0);
   const initial = { ...goal, tokenBudget: 5000, maxContinuations: 7, status: "paused" as const, usage: { ...goal.usage, input: 12, output: 3 } };
   const updated = setup({ goal: initial, revision: 4 });
-  assert.equal(await updated.command.handler("revised"), "Goal updated.");
+  assert.equal(await updated.command.handler("revised"), "Goal updated.\nrevised");
   assert.deepEqual(updated.calls[0].intent, { type: "update_objective", objective: "revised" });
   assert.equal(updated.calls.length, 1);
   assert.equal(updated.kicks(), 0);
@@ -213,13 +224,13 @@ test("create kicks; bare create with an unfinished goal updates the objective in
 test("bare create with --tokens on an unfinished goal also updates the budget", async () => {
   const initial = { ...goal, tokenBudget: 5000 };
   const h = setup({ goal: initial, revision: 4 });
-  assert.equal(await h.command.handler("--tokens 200 revised"), "Goal updated.");
+  assert.equal(await h.command.handler("--tokens 200 revised"), "Goal updated.\nrevised");
   assert.deepEqual(h.calls[0].intent, { type: "update_objective", objective: "revised", tokenBudget: 200 });
 });
 
 test("create with a complete goal starts a fresh goal", async () => {
   const h = setup({ goal: { ...goal, status: "complete" as const }, revision: 4 });
-  assert.equal(await h.command.handler("next mission"), "Goal created.");
+  assert.equal(await h.command.handler("next mission"), "Goal created.\nnext mission");
   assert.equal(h.calls[0].intent.type, "create");
   assert.equal(h.kicks(), 1);
 });
@@ -229,8 +240,8 @@ test("clear then recreate uses the accumulated revision", async () => {
   const goalCommit = createGoalCommit({ readBranch: () => entries, append: entry => { entries.push(entry); } });
   let command: any;
   registerGoalCommands({ registerCommand: (_name, c) => { command = c; } }, { goalCommit, send: () => {}, kick: async () => {} });
-  assert.match(await command.handler("clear"), /Goal cleared/);
-  assert.equal(await command.handler("new objective"), "Goal created.");
+  assert.equal(await command.handler("clear"), "Goal cleared.");
+  assert.equal(await command.handler("new objective"), "Goal created.\nnew objective");
   assert.equal(goalCommit.current()?.goal.objective, "new objective");
   assert.deepEqual(entries.map(entry => entry.type), ["goal.created", "goal.cleared", "goal.created"]);
 });
@@ -242,7 +253,7 @@ test("edit command updates the objective in place and replays through the store"
   const goalCommit = createGoalCommit(store);
   let command: any;
   registerGoalCommands({ registerCommand: (_name, c) => { command = c; } }, { goalCommit, send: () => {}, kick: async () => {} });
-  assert.equal(await command.handler("edit revised"), "Goal edited.");
+  assert.equal(await command.handler("edit revised"), "Goal updated.\nrevised");
   assert.deepEqual(entries.map(entry => entry.type), ["goal.created", "goal.objective_updated"]);
   const replayed = createGoalCommit(store).current()!.goal;
   assert.equal(replayed.objective, "revised");
